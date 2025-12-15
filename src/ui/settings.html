@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LinkBee Settings</title>
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    
+    <div class="glass-container">
+        <header>
+            <div class="logo-group">
+                <a href="popup.html" class="icon-btn" style="margin-right: 0.5rem;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+                    </svg>
+                </a>
+                <h1>Settings</h1>
+            </div>
+        </header>
+
+        <main>
+            <section class="glass-panel">
+                <h2 style="font-size: 0.95rem; margin: 0 0 1rem 0; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 0.5rem;">AI Configuration</h2>
+                
+                <div class="form-group">
+                    <label for="provider-select">AI Provider</label>
+                    <select id="provider-select" disabled style="opacity: 0.7; cursor: not-allowed;">
+                        <option value="gemini" selected>Google Gemini (v2.5 Flash)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="api-key">API Key</label>
+                    <div style="position: relative;">
+                        <input type="password" id="api-key" placeholder="sk-...">
+                        <button id="toggle-visibility" class="icon-btn" style="position: absolute; right: 2px; top: 2px; bottom: 2px; height: auto; padding: 0 10px; border-radius: 6px;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
+                        </button>
+                    </div>
+                    <p class="text-sm mt-1">
+                        <a href="https://ai.google.dev/gemini-api/docs/api-key" target="_blank" style="color: #93c5fd; text-decoration: none; border-bottom: 1px dotted #93c5fd;">Get your API key &rarr;</a>
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label for="analysisThreshold">Re-analyze after (hours)</label>
+                    <input type="number" id="analysisThreshold" placeholder="24" min="1">
+                </div>
+
+                <div class="form-group" style="margin-bottom: 0.5rem;">
+                    <label for="syncDays">Fetch History (Days)</label>
+                    <input type="number" id="syncDays" placeholder="30" min="1" max="365">
+                </div>
+            </section>
+
+            <section class="glass-panel" style="border: 1px solid var(--danger-border); background: rgba(100, 20, 20, 0.1);">
+                <h2 style="font-size: 0.9rem; margin: 0 0 0.75rem 0; color: #fca5a5;">Maintenance</h2>
+                <button id="runDailyJob" class="btn-danger">
+                    Run Daily Analysis Job
+                </button>
+                <p class="text-muted text-sm text-center mt-1">
+                    Forces an immediate re-scan of LinkedIn messages.
+                </p>
+            </section>
+
+            <div style="margin-top: 1.5rem; margin-bottom: 2rem;">
+                <button id="save-btn" class="btn-primary">
+                    Save Changes
+                </button>
+                <div id="status-msg" class="text-center text-sm" style="height: 1.5rem; margin-top: 0.75rem; color: #86efac;"></div>
+            </div>
+
+        </main>
+    </div>
+    
+    <script type="module" src="./settings.js"></script>
+</body>
+</html>

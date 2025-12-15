@@ -1,0 +1,21 @@
+{
+  "name": "linkedinfollowups",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "vite build && cp manifest.json dist/ && mkdir -p dist/assets && cp src/assets/* dist/assets/",
+    "dev": "vite build --watch"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@google/genai": "^1.33.0",
+    "autoprefixer": "^10.4.23",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.18",
+    "vite": "^7.2.7"
+  }
+}
