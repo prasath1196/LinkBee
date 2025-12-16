@@ -1,17 +1,9 @@
 console.log("LinkBee: Content script loaded");
-
-// ============================================================================
-// CONFIGURATION & SELECTORS
-// ============================================================================
 const CONFIG = {
     // Containers
     FULL_PAGE_CONTAINER: ".msg-s-message-list-content",
     OVERLAY_CONTAINER: ".msg-overlay-conversation-bubble__content-wrapper",
-
-    // Iteration for "Scrape All"
     SIDEBAR_LIST_ITEM: ".msg-conversation-listitem",
-
-    // Selectors within a Chat
     SELECTORS: {
         LIST_ITEM: "li", // Chat rows are usually LIs
         DATE_HEADER: ".msg-s-message-list__time-heading",
@@ -31,14 +23,6 @@ let observer = null;
 let debounceTimer = null;
 let isCrawling = false; // Flag to prevent observer loops during crawl
 
-// ============================================================================
-// CORE PARSING LOGIC (TIMESTAMP FIX)
-// ============================================================================
-
-/**
- * Scrapes the currently visible chat window (Full page or Overlay).
- * Uses sequential parsing to associate Date Headers with Messages.
- */
 function scrapeActiveConversation(fromCrawler = false) {
     if (isCrawling && !fromCrawler) return; // Don't scrape individually if we are running a batch crawl
 
@@ -165,14 +149,6 @@ function scrapeActiveConversation(fromCrawler = false) {
     }
 }
 
-// ============================================================================
-// CRAWLER LOGIC (FEATURE #1)
-// ============================================================================
-
-/**
- * Iterates through the visible conversation list sidebar, clicking each one
- * to load it, scraping it, and moving to the next.
- */
 async function syncRecentChats() {
     const sidebar = document.querySelector(".msg-conversations-container__conversations-list");
     if (!sidebar) {
@@ -196,7 +172,7 @@ async function syncRecentChats() {
     sidebar.scrollTop = 0;
     await new Promise(r => setTimeout(r, 1500));
 
-    const items = Array.from(sidebar.querySelectorAll(CONFIG.SIDEBAR_LIST_ITEM));
+    let items = Array.from(sidebar.querySelectorAll(CONFIG.SIDEBAR_LIST_ITEM));
 
     // LOGGING (User Request)
     console.log(`LinkBee: [SYNC START] Found ${items.length} conversations in sidebar.`);
@@ -205,12 +181,29 @@ async function syncRecentChats() {
         console.log(`LinkBee: Sidebar Item [${idx}]: ${namePart.trim()}`);
     });
 
-    // Loop through ALL visible items (User Request: "Instead of 15...")
-    // We rely on the Date Filter to stop.
-    // User Request: "30 days sync is stopping and not going till the end" -> Removed artificial 50 limit.
-    const loopLimit = items.length;
+    // Run until we hit the cutoff date (or run out of items)
+    let i = 0;
+    while (true) {
+        // If we've reached the end of the current DOM list, try scrolling
+        if (i >= items.length) {
+            console.log(`LinkBee: [SYNC] Reached end of current list (${items.length}). Scrolling to load more...`);
+            const previousHeight = sidebar.scrollHeight;
+            sidebar.scrollBy({ top: 800, behavior: 'smooth' });
 
-    for (let i = 0; i < loopLimit; i++) {
+            // Wait for LinkedIn to fetch/render
+            await new Promise(r => setTimeout(r, 2000));
+
+            // Re-fetch items from DOM
+            items = Array.from(sidebar.querySelectorAll(CONFIG.SIDEBAR_LIST_ITEM));
+            console.log(`LinkBee: [SYNC] Update: ${items.length} total items in DOM.`);
+
+            // If no new items appeared, we are likely at the very end
+            if (i >= items.length) {
+                console.log("LinkBee: [SYNC] No new items loaded after scroll. Stopping.");
+                break;
+            }
+        }
+
         const item = items[i];
 
         // Extract Name from Sidebar for verification
@@ -320,6 +313,8 @@ async function syncRecentChats() {
         // Remove highlight
         item.style.borderLeft = "";
         item.style.backgroundColor = "";
+
+        i++;
     }
 
     isCrawling = false;

@@ -46,9 +46,24 @@ function switchTab(tab) {
 
 async function init() {
     // Check for updates
-    chrome.storage.local.get(['needsReload'], (data) => {
+    chrome.storage.local.get(['needsReload', 'isAnalyzing'], (data) => {
         if (data.needsReload) {
             chrome.runtime.sendMessage({ type: "ACK_RELOAD" });
+        }
+        toggleAnalysisLoader(data.isAnalyzing);
+    });
+
+    // Listen for Analysis State
+    // Listen for Analysis State & Data Changes
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local') {
+            if (changes.isAnalyzing) {
+                toggleAnalysisLoader(changes.isAnalyzing.newValue);
+            }
+            // Live Update: If data sources change, reload the view
+            if (changes.notifications || changes.conversations || changes.reminders) {
+                loadData();
+            }
         }
     });
 
@@ -77,12 +92,58 @@ async function init() {
         });
     }
 
+    // --- Manual Reminder Logic ---
+    const btnAdd = document.getElementById('btn-add-reminder');
+    const formBox = document.getElementById('manual-reminder-form');
+    const btnSave = document.getElementById('btn-save-manual-reminder');
+
+    if (btnAdd && formBox) {
+        btnAdd.addEventListener('click', () => {
+            formBox.classList.toggle('hidden');
+        });
+    }
+
+    if (btnSave) {
+        btnSave.addEventListener('click', async () => {
+            const text = document.getElementById('manual-rem-text').value;
+            const url = document.getElementById('manual-rem-url').value;
+            const dateVal = document.getElementById('manual-rem-date').value;
+
+            if (!text) return; // Simple validation
+
+            let dueDate = null;
+            if (dateVal) {
+                dueDate = new Date(dateVal + 'T12:00:00').getTime();
+            } else {
+                // Default to today? or just null
+                dueDate = Date.now();
+            }
+
+            const payload = {
+                id: crypto.randomUUID(),
+                // Manual reminders don't have a linked conversation ID necessarily
+                conversationId: 'manual',
+                conversationName: "Manual Task",
+                text: text,
+                dueDate: dueDate,
+                url: url,
+                createdDate: Date.now(),
+                source: 'user_manual',
+                status: 'pending'
+            };
+
+            await chrome.runtime.sendMessage({ type: 'ADD_REMINDER', data: payload });
+            // Reload to show
+            window.location.reload();
+        });
+    }
+
     switchTab('followups'); // Default
     await loadData();
 }
 
 async function loadData() {
-    const data = await chrome.storage.local.get(['conversations', 'reminders']);
+    const data = await chrome.storage.local.get(['conversations', 'reminders', 'notifications']);
     const convs = data.conversations || {};
     const totalScanned = Object.keys(convs).length;
     const notifications = data.notifications || {};
@@ -90,20 +151,27 @@ async function loadData() {
 
     // --- 1. Follow-ups (AI Opportunities) ---
     // Include YES decisions AND Pending (no decision yet but active)
+    // --- 1. Follow-ups (AI Opportunities) ---
+    // User Request: "Show the data inside notiications in local storage... do not need any filters."
     const followups = Object.values(notifications)
-        .filter(c => {
-            if (c.status === 'done' || c.status === 'dismissed') return false;
-            // Show if AI said YES
-            if (c.aiDecision === 'YES') return true;
-            // ALSO show if AI hasn't run yet but it looks like a candidate (I sent last)
-            if (!c.aiDecision && c.lastSenderIsMe) return true;
-            return false;
+        .map(n => {
+            // Match with conversationId if available
+            const conv = convs[n.conversationId] || {};
+
+            return {
+                ...n, // Spread notification data (message, reason, etc.)
+                // CRITICAL: Actions (Dismiss, Reminder) use 'id' which expects Conversation ID
+                id: n.conversationId,
+                // Original Notification ID (in case we need it specifically, though actions currently use convID)
+                notificationId: n.id,
+                // Fallback validities
+                name: n.name || conv.name || "Unknown",
+                lastMessage: conv.lastMessage || "",
+                lastSenderIsMe: conv.lastSenderIsMe,
+                url: n.url || conv.url
+            };
         })
         .sort((a, b) => {
-            // Prioritize YES over Pending
-            const aScore = a.aiDecision === 'YES' ? 2 : 1;
-            const bScore = b.aiDecision === 'YES' ? 2 : 1;
-            if (aScore !== bScore) return bScore - aScore;
             return (b.timestamp || 0) - (a.timestamp || 0);
         });
 
@@ -125,9 +193,128 @@ async function loadData() {
             };
         });
 
-    // Sort by Due Date Ascending (Soonest first)
-    allReminders.sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0));
-    renderReminders(allReminders);
+    // --- 2. Reminders Loop ---
+    // User logic: Split into Today and Upcoming
+    const todayStr = new Date().toDateString();
+
+    // Sort all first
+    // Filter out 'triggered' or 'done' if you consider duplicates, but usually we just want pending
+    // We already filter status !== 'done' above.
+
+    const todayItems = [];
+    const upcomingItems = [];
+
+    allReminders.forEach(r => {
+        if (!r.dueDate) {
+            upcomingItems.push(r);
+            return;
+        }
+        const d = new Date(r.dueDate);
+        if (d.toDateString() === todayStr || d < new Date()) {
+            // Due today OR Overdue (show in Today to be safe)
+            todayItems.push(r);
+        } else {
+            upcomingItems.push(r);
+        }
+    });
+
+    renderSplitReminders(todayItems, upcomingItems);
+}
+
+function renderSplitReminders(todayItems, upcomingItems) {
+    const listToday = document.getElementById('list-today');
+    const listUpcoming = document.getElementById('list-upcoming');
+    const emptyState = document.getElementById('empty-state-reminders');
+    const headers = document.querySelectorAll('#view-reminders h2'); // Section headers
+
+    listToday.innerHTML = '';
+    listUpcoming.innerHTML = '';
+
+    const hasItems = todayItems.length > 0 || upcomingItems.length > 0;
+
+    if (!hasItems) {
+        listToday.style.display = 'none';
+        listUpcoming.style.display = 'none';
+        headers.forEach(h => h.style.display = 'none');
+        emptyState.classList.remove('hidden');
+        emptyState.style.display = 'flex';
+        return;
+    }
+
+    emptyState.classList.add('hidden');
+    emptyState.style.display = 'none';
+    headers.forEach(h => h.style.display = 'block');
+    listToday.style.display = 'block';
+    listUpcoming.style.display = 'block';
+
+    // Render duplicates logic
+    const renderCard = (container, item) => {
+        const el = document.createElement('div');
+        el.className = 'card-padding glass-panel';
+        el.style.marginBottom = '12px';
+
+        const dateStr = item.dueDate ? new Date(item.dueDate).toLocaleDateString() : 'No date';
+
+        // Check if URL is valid
+        const hasLink = item.url || (item.conversationId && item.conversationId !== 'manual');
+        const linkUrl = item.url ? item.url : `https://www.linkedin.com/messaging/thread/${item.conversationId}/`;
+
+        el.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: start;">
+                <div>
+                    <h3 style="font-weight: 600; font-size: 0.9rem;">${item.conversationName || 'Reminder'}</h3>
+                    <p class="text-xs text-gray-500 mb-2">Due: ${dateStr}</p>
+                    <p style="font-size: 0.9rem;">🔔 ${item.text}</p>
+                </div>
+                <button class="dismiss-rem-btn icon-btn" title="Mark Done" style="color: #10b981;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                </button>
+            </div>
+            ${hasLink ? `
+            <div style="margin-top: 8px;">
+                 <a href="#" data-url="${linkUrl}" class="chat-link-btn btn-secondary" style="display: block; text-align: center; font-size: 0.8rem; padding: 4px;">    
+                    Go to Link
+                </a>
+            </div>` : ''}
+        `;
+
+        // Listeners
+        el.querySelector('.dismiss-rem-btn').onclick = async () => {
+            // Fixed Dismiss Logic
+            await chrome.runtime.sendMessage({
+                type: 'DISMISS_REMINDER',
+                reminderId: item.id,
+                conversationId: item.conversationId
+            });
+            // Remove element locally for instant feedback
+            el.remove();
+            // Ideally reload data to refresh lists correctly
+            // loadData(); // Optional, but el.remove() feels snappier
+        };
+
+        const chatLink = el.querySelector('.chat-link-btn');
+        if (chatLink) {
+            chatLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                chrome.tabs.create({ url: chatLink.getAttribute('data-url') });
+            });
+        }
+
+        container.appendChild(el);
+    };
+
+    todayItems.forEach(i => renderCard(listToday, i));
+    upcomingItems.forEach(i => renderCard(listUpcoming, i));
+
+    // Hide empty sections if needed (optional polish)
+    if (todayItems.length === 0) {
+        listToday.innerHTML = '<p class="text-xs text-gray-500" style="font-style:italic;">No reminders due today.</p>';
+    }
+    if (upcomingItems.length === 0) {
+        listUpcoming.innerHTML = '<p class="text-xs text-gray-500" style="font-style:italic;">No upcoming reminders.</p>';
+    }
 }
 
 function renderFollowupsList(totalScanned = 0) {
@@ -162,66 +349,6 @@ function renderFollowupsList(totalScanned = 0) {
         const card = createCard(item);
         card.style.marginBottom = "10px"; // Spacing between cards
         list.appendChild(card);
-    });
-}
-
-function renderReminders(items) {
-    const list = document.getElementById('reminder-list');
-    const empty = document.getElementById('empty-state-reminders');
-    list.innerHTML = '';
-
-    if (items.length === 0) {
-        list.classList.add('hidden');
-        empty.classList.remove('hidden');
-        empty.style.display = 'flex';
-        return;
-    }
-
-    list.classList.remove('hidden');
-    empty.classList.add('hidden');
-    empty.style.display = 'none';
-
-    items.forEach(r => {
-        const el = document.createElement('div');
-        el.className = 'card-padding glass-panel';
-        el.style.marginBottom = '12px';
-
-        const dateStr = r.dueDate ? new Date(r.dueDate).toLocaleDateString() : 'No date';
-
-        el.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: start;">
-                <div>
-                    <h3 style="font-weight: 600; font-size: 0.9rem;">${r.conversationName || 'Unknown'}</h3>
-                    <p class="text-xs text-gray-500 mb-2">Due: ${dateStr}</p>
-                    <p style="font-size: 0.9rem;">🔔 ${r.text}</p>
-                </div>
-                <button class="dismiss-rem-btn icon-btn" title="Mark Done" style="color: #10b981;">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                </button>
-            </div>
-            <div style="margin-top: 8px;">
-                 <a href="#" data-url="https://www.linkedin.com/messaging/thread/${r.conversationId}/" class="chat-link-btn btn-secondary" style="display: block; text-align: center; font-size: 0.8rem; padding: 4px;">    
-                    Go to Chat
-                </a>
-            </div>
-        `;
-
-        // Attach listeners
-        el.querySelector('.dismiss-rem-btn').onclick = async () => {
-            await dismissReminder(r.conversationId, r.id, el);
-        };
-
-        // Chat Link Logic (Reuse)
-        const chatLink = el.querySelector('.chat-link-btn');
-        chatLink.addEventListener('click', (e) => {
-            e.preventDefault();
-            const url = `https://www.linkedin.com/messaging/thread/${r.conversationId}/`;
-            chrome.tabs.update({ url: url });
-        });
-
-        list.appendChild(el);
     });
 }
 
@@ -406,7 +533,7 @@ function createCard(data) {
                         });
                     } else {
                         chrome.tabs.update(tab.id, { url: url });
-                        window.close();
+                        // window.close();
                     }
                 }
             });
@@ -467,6 +594,174 @@ async function markAsDone(id, element) {
             } else {
                 element.remove();
             }
+        }
+    });
+}
+
+function toggleAnalysisLoader(show) {
+    const syncBtn = document.getElementById('sync-btn');
+    const headerTitle = document.querySelector('h1.text-lg');
+
+    // Existing Loader check
+    let loader = document.getElementById('analysis-loader');
+
+    if (show) {
+        if (!loader && headerTitle) {
+            loader = document.createElement('span');
+            loader.id = 'analysis-loader';
+            loader.className = 'text-xs text-blue-600 ml-2';
+            loader.style.fontWeight = 'normal';
+            loader.innerHTML = `Analyzing <span class="loading-dots">...</span>`;
+
+            // Add simple CSS for dots if needed, or just text
+            const style = document.createElement('style');
+            style.innerHTML = `
+                @keyframes blink { 0% { opacity: .2; } 20% { opacity: 1; } 100% { opacity: .2; } }
+                .loading-dots span { animation-name: blink; animation-duration: 1.4s; animation-iteration-count: infinite; animation-fill-mode: both; }
+                .loading-dots span:nth-child(2) { animation-delay: .2s; }
+                .loading-dots span:nth-child(3) { animation-delay: .4s; }
+            `;
+            if (!document.getElementById('loader-style')) {
+                style.id = 'loader-style';
+                document.head.appendChild(style);
+            }
+
+            // Rebuild innerHTML with spans
+            loader.innerHTML = `Analyzing<span style="font-size: 1.1em;">.</span><span style="font-size: 1.1em; animation-delay: 0.2s;">.</span><span style="font-size: 1.1em; animation-delay: 0.4s;">.</span>`;
+
+            headerTitle.appendChild(loader);
+        }
+
+        // Also spin the sync button
+        if (syncBtn) {
+            const icon = syncBtn.querySelector('svg');
+            if (icon) icon.classList.add('spin-anim');
+        }
+
+    } else {
+        if (loader) loader.remove();
+        if (syncBtn) {
+            const icon = syncBtn.querySelector('svg');
+            if (icon) icon.classList.remove('spin-anim');
+        }
+    }
+}
+
+// --- Settings Logic ---
+const settingsBtn = document.getElementById('settings-btn');
+const settingsBackBtn = document.getElementById('settings-back-btn');
+const settingsView = document.getElementById('view-settings');
+const tabsContainer = document.querySelector('.tabs'); // To hide tabs when in settings
+
+// 1. Open Settings
+if (settingsBtn) {
+    settingsBtn.addEventListener('click', async () => {
+        // Hide main views
+        document.getElementById('view-followups').classList.add('hidden');
+        document.getElementById('view-reminders').classList.add('hidden');
+        tabsContainer.classList.add('hidden'); // Hide the tab bar
+
+        // Show Settings
+        settingsView.classList.remove('hidden');
+
+        // Load saved values
+        const data = await chrome.storage.local.get(['apiKey', 'aiProvider', 'autoScan', 'syncDays', 'analysisThreshold']);
+        if (document.getElementById('setting-api-key')) {
+            document.getElementById('setting-api-key').value = data.apiKey || '';
+        }
+        if (document.getElementById('setting-provider')) {
+            document.getElementById('setting-provider').value = data.aiProvider || 'openai';
+        }
+        if (document.getElementById('setting-provider')) {
+            document.getElementById('setting-provider').value = data.aiProvider || 'openai';
+        }
+        // New Settings
+        if (document.getElementById('setting-sync-days')) {
+            document.getElementById('setting-sync-days').value = data.syncDays || 30;
+        }
+        if (document.getElementById('setting-analysis-interval')) {
+            document.getElementById('setting-analysis-interval').value = data.analysisThreshold || 24;
+        }
+    });
+}
+
+// 2. Close Settings (Back)
+if (settingsBackBtn) {
+    settingsBackBtn.addEventListener('click', () => {
+        settingsView.classList.add('hidden');
+        tabsContainer.classList.remove('hidden');
+
+        // Return to whatever tab is active
+        const isFollowupsActive = document.getElementById('tab-followups').classList.contains('active');
+        if (isFollowupsActive) {
+            document.getElementById('view-followups').classList.remove('hidden');
+        } else {
+            document.getElementById('view-reminders').classList.remove('hidden');
+        }
+    });
+}
+
+// 3. Save Settings
+const saveBtn = document.getElementById('save-settings-btn');
+if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+        const apiKey = document.getElementById('setting-api-key').value;
+        const provider = document.getElementById('setting-provider').value;
+
+        // Validation: Sync Days (Max 60)
+        let syncDays = parseInt(document.getElementById('setting-sync-days').value) || 30;
+        if (syncDays > 60) syncDays = 60;
+        if (syncDays < 1) syncDays = 1;
+        // Update input to reflect capped value if needed
+        document.getElementById('setting-sync-days').value = syncDays;
+
+        let analysisThreshold = parseInt(document.getElementById('setting-analysis-interval').value) || 24;
+        if (analysisThreshold < 1) analysisThreshold = 1;
+
+        await chrome.storage.local.set({
+            apiKey,
+            aiProvider: provider,
+            syncDays,
+            analysisThreshold
+        });
+
+        // Show feedback
+        const status = document.getElementById('save-status');
+        status.classList.remove('hidden');
+        setTimeout(() => status.classList.add('hidden'), 2000);
+
+        // Optional: Notify background script if it needs to update immediately
+        chrome.runtime.sendMessage({ type: "SETTINGS_UPDATED" });
+    });
+}
+
+// 4. Force Analysis Button
+const forceAnalysisBtn = document.getElementById('btn-force-analysis');
+if (forceAnalysisBtn) {
+    forceAnalysisBtn.addEventListener('click', async () => {
+        // Visual feedback
+        const originalText = forceAnalysisBtn.innerText;
+        forceAnalysisBtn.innerText = "Running...";
+        forceAnalysisBtn.disabled = true;
+
+        try {
+            await chrome.runtime.sendMessage({ type: "SCAN_COMPLETED" });
+
+            // Wait a moment for visual feedback
+            await new Promise(r => setTimeout(r, 1000));
+            forceAnalysisBtn.innerText = "Started!";
+
+            setTimeout(() => {
+                forceAnalysisBtn.innerText = originalText;
+                forceAnalysisBtn.disabled = false;
+            }, 2000);
+        } catch (e) {
+            console.error(e);
+            forceAnalysisBtn.innerText = "Error";
+            setTimeout(() => {
+                forceAnalysisBtn.innerText = originalText;
+                forceAnalysisBtn.disabled = false;
+            }, 2000);
         }
     });
 }

@@ -65,7 +65,13 @@ class GeminiStrategy extends AIStrategy {
             } else {
                 decisionText = `[Last Message]: "${context.lastMessage}"`;
             }
-
+            console.log("INPUT DATA: ", {
+                contextText,
+                decisionText,
+                daysSince: context.daysSince,
+                conversationLength: context.history.length,
+                previousAnalysis: context.previousAnalysis
+            });
             const prompt = `
                 You are LinkBee, an elite Technical Career Coach for Software Engineers.
                 Your goal is to scan the user's LinkedIn inbox to uncover hidden **Software Engineering Job Opportunities** (SDE, Backend, Frontend, Fullstack).
@@ -81,6 +87,10 @@ class GeminiStrategy extends AIStrategy {
                 === INPUT DATA ===
                 - Days since last message: ${context.daysSince}
                 - Conversation Length: ${context.history.length}
+                - Previous Analysis (if any):
+                  - Decision: ${context.previousAnalysis?.decision || "None"}
+                  - Reason: ${context.previousAnalysis?.reason || "N/A"}
+                  - Date: ${context.previousAnalysis?.date || "N/A"}
 
                 === INSTRUCTIONS ===
                 
@@ -125,11 +135,12 @@ class GeminiStrategy extends AIStrategy {
                 - *Strategy:* "Update" check-in. Share a win/project to get back on their radar.
 
                 PHASE 3: DECISION LOGIC (Strict & Strategic)
-                - **YES (High Priority):** Scenarios A (Recovery), D (Senior Ask), or F (Timed Deferral).
-                - **YES (Strategic):** Scenario E (Strategic Pivot) -- Applies to **ALL** categories (Recruiter, Leader, Peer/Alumni).
+                - **YES (High Priority):** Scenarios A (Recovery), D (Senior Ask), or F (Timed Deferral). (> 1 day to decide yes on followup)
+                - **YES (Strategic):** Scenario E (Strategic Pivot) -- Applies to **ALL** categories (Recruiter, Leader, Peer/Alumni) (CHECK FOR TIMELINE. > 2 days to decide yes on followup).
                 - **YES (Maintenance):** Scenario G (Dormant Revival) -- ONLY if connection is "Warm" (not failed cold outreach).
                 - **YES (Opportunistic):** Scenario C (Casual Intel) or B (Cold Follow-up > 5 days).
                 - **NO:** Scenario G if the connection was "Cold" (history length < 2) or "Other".
+                - **NO:** If "Last Notification Based on Timeline" is recently set and no significant new context (messages) has occurred since then, output NO to avoid duplicate nudges.
                 - **NO:** Hard rejection ("We filled the role") or Deferral date is still in FUTURE.
 
                 PHASE 4: DRAFTING (Engineering Context)
@@ -156,10 +167,10 @@ class GeminiStrategy extends AIStrategy {
             // SDK Usage
             let response;
             try {
-                // Removing experimental 2.5-flash attempt. Using standard 1.5-flash.
-                console.log("[LinkBee AI] Attempting analysis with gemini-1.5-flash...");
+                // User requested Gemini 2.0 Flash (Experimental)
+                console.log("[LinkBee AI] Attempting analysis with gemini-2.0-flash-exp...");
                 response = await client.models.generateContent({
-                    model: "gemini-1.5-flash",
+                    model: "gemini-2.0-flash-exp",
                     contents: [{ parts: [{ text: prompt }] }],
                     config: { responseMimeType: "application/json" }
                 });
