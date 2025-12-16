@@ -57,13 +57,18 @@ export async function handleNewConversation(data, sendResponse) {
     if (sendResponse) sendResponse({ success: true, id: conversationId });
 
     // 4. TRIGGER ANALYSIS (If needed)
-    if (isMe && store.apiKey) {
-        console.log("LinkBee: [ANALYZING] Triggering immediate analysis...");
-        // Force analyze (threshold 0) because user action implies active context
+    // Always trigger analysis if we have an API key and history changed 
+    // (analyzeConversation will handle debounce logic internally if needed, 
+    // but here we force check because we just scraped fresh data).
+    if (store.apiKey) {
+        console.log(`LinkBee: [ANALYZING] Triggering immediate analysis for ${targetName}...`);
+
+        // Use threshold 0 to skip debounce check since we just got new data
         analyzeConversation(existing, store.apiKey, store.aiProvider, 0).then(async () => {
             // Re-fetch to avoid race conditions with other updates
             const freshStore = await chrome.storage.local.get('conversations');
             const freshConvos = freshStore.conversations || {};
+            // Merge results back
             freshConvos[conversationId] = existing;
             await chrome.storage.local.set({ conversations: freshConvos });
             console.log("LinkBee: [SAVED] Post-analysis data persisted for", conversationId);

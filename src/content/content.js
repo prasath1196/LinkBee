@@ -15,7 +15,14 @@ const CONFIG = {
         // Sent messages often have a hidden specific timestamp
         TIMESTAMP_EXACT: ".msg-s-event-with-indicator__sending-indicator",
         IS_OTHER: ".msg-s-event-listitem--other", // Class present if sender is NOT me
-        CONVERSATION_TITLE: ".msg-entity-lockup__entity-title"
+        CONVERSATION_TITLE: ".msg-entity-lockup__entity-title",
+
+        // Profile Views Selectors (Best Guess based on standard LinkedIn)
+        PV_CARD: ".feed-shared-update-v2, .profile-view-card, li.nt-card", // Fallbacks
+        PV_NAME: ".update-components-actor__name, .nt-card__headline",
+        PV_HEADLINE: ".update-components-actor__description, .nt-card__subtext",
+        PV_TIME: ".update-components-actor__sub-description, .nt-card__time-text",
+        PV_LINK: ".update-components-actor__container-link, .nt-card__image-link"
     }
 };
 
@@ -47,6 +54,17 @@ function scrapeActiveConversation(fromCrawler = false) {
     if (!container) {
         console.warn("LinkBee: [SCRAPE FAIL] No chat container found. Are you on a messaging page?");
         return;
+    }
+
+    // New Check: Ensure we actually found a conversation title or meaningful content
+    // to avoid scraping generic page noise as "Unknown"
+    const titleEl = document.querySelector(CONFIG.SELECTORS.CONVERSATION_TITLE);
+    const hasOverlayTitle = isOverlay && container.closest(CONFIG.OVERLAY_CONTAINER)?.querySelector(".msg-overlay-bubble-header__title");
+
+    if (!titleEl && !hasOverlayTitle) {
+        // Fallback: If we can't find a title, check if we found any messages at all
+        // If 0 messages, we definitely shouldn't process.
+        if (container.children.length === 0) return;
     }
 
     // 2. Sequential Parse
@@ -146,6 +164,168 @@ function scrapeActiveConversation(fromCrawler = false) {
         }).catch(e => {
             console.error("LinkBee: [SEND FAIL]", e);
         });
+    }
+}
+
+async function scrapeProfileViews() {
+    console.log("LinkBee: [PROFILE_VIEWS] Starting scrape...");
+    showToast("LinkBee: Scanning Profile Views...", 3000);
+
+    // 1. Get Settings
+    const settings = await chrome.storage.local.get(['profileViewsDays']);
+    let lookbackDays = settings.profileViewsDays || 14;
+    // Cap at 14 days as requested
+    if (lookbackDays > 14) lookbackDays = 14;
+
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - lookbackDays);
+    cutoffDate.setHours(0, 0, 0, 0);
+
+    console.log(`LinkBee: [PV] Lookback: ${lookbackDays} days (Cutoff: ${cutoffDate.toDateString()})`);
+
+    // Helper to parse "Viewed 5d ago", "Viewed 2w ago", "Viewed 1mo ago"
+    const parseViewTime = (text) => {
+        if (!text) return Date.now();
+        const now = Date.now();
+        const lower = text.toLowerCase();
+
+        let multiplier = 0;
+        let value = 0;
+
+        // Extract number
+        const match = lower.match(/(\d+)/);
+        if (match) value = parseInt(match[1]);
+
+        if (lower.includes('h') || lower.includes('m') && !lower.includes('mo')) {
+            // Hours or minutes -> treat as "Today"
+            return now;
+        } else if (lower.includes('d')) {
+            multiplier = 24 * 60 * 60 * 1000;
+        } else if (lower.includes('w')) {
+            multiplier = 7 * 24 * 60 * 60 * 1000;
+        } else if (lower.includes('mo')) {
+            multiplier = 30 * 24 * 60 * 60 * 1000;
+        } else if (lower.includes('y')) {
+            multiplier = 365 * 24 * 60 * 60 * 1000;
+        }
+
+        return now - (value * multiplier);
+    };
+
+    // 2. Pagination Loop
+    let reachedCutoff = false;
+    let attempts = 0;
+
+    while (!reachedCutoff && attempts < 20) { // Safety break
+
+        // Find all cards
+        // Refined Selector based on user HTML
+        const cards = Array.from(document.querySelectorAll("li.member-analytics-addon-entity-list__item, li.nt-card, .feed-shared-update-v2"));
+
+        if (cards.length === 0) {
+            console.log("LinkBee: [PV] No cards found yet. Waiting...");
+            await new Promise(r => setTimeout(r, 1000));
+            attempts++;
+            continue;
+        }
+
+        // Check the LAST card's time
+        const lastCard = cards[cards.length - 1];
+        const timeEl = lastCard.querySelector(".artdeco-entity-lockup__caption, .nt-card__time-text");
+        const timeText = timeEl ? timeEl.innerText.trim() : "";
+        const lastTimestamp = parseViewTime(timeText);
+
+        console.log(`LinkBee: [PV] Scanned ${cards.length} cards. Last item: "${timeText}" (~${new Date(lastTimestamp).toLocaleDateString()})`);
+
+        if (lastTimestamp < cutoffDate.getTime()) {
+            console.log("LinkBee: [PV] Reached cutoff date.");
+            reachedCutoff = true;
+        } else {
+            // Need more? Look for "Show more results" button
+            const loadMoreBtn = document.querySelector(".scaffold-finite-scroll__load-button");
+
+            if (loadMoreBtn) {
+                console.log("LinkBee: [PV] Clicking 'Show more results'...");
+                loadMoreBtn.click();
+                await new Promise(r => setTimeout(r, 2000)); // Wait for load
+            } else {
+                console.log("LinkBee: [PV] No 'Show more' button found. End of list?");
+                // Try scrolling to bottom just in case it's infinite scroll without button
+                window.scrollTo(0, document.body.scrollHeight);
+                await new Promise(r => setTimeout(r, 1500));
+
+                // If height didn't change much, we might be done
+                reachedCutoff = true; // Break loop
+            }
+        }
+        attempts++;
+    }
+
+    // 3. Extraction (Final Pass)
+    const cards = Array.from(document.querySelectorAll("li.member-analytics-addon-entity-list__item, li.nt-card, .feed-shared-update-v2"));
+    const views = [];
+
+    cards.forEach(card => {
+        // Name
+        const nameEl = card.querySelector(".artdeco-entity-lockup__title, .nt-card__headline, .update-components-actor__name");
+        let name = nameEl ? nameEl.innerText.trim() : "Member";
+        // Clean name (remove "View profile", degree, premium icon text etc if they leak)
+        // The innerText often includes hidden span "View X's profile".
+        // Let's use the first visible text node if checking explicitly or trust innerText cleaning
+        // Actually, innerText usually strips hidden elements? Chrome does. 
+        // But the HTML shows <span class="visually-hidden">View Name...</span>. 
+        // innerText DOES include visually hidden text in some contexts or if CSS isn't fully computed by JSDOM (wait, this is real chrome).
+        // Chrome innerText ignores `display: none` but usually respects `visibility: hidden`? 
+        // To be safe: take the first part before newline if multiple lines
+        name = name.split("\n")[0].trim();
+
+        if (!name || name === "Member" || name === "LinkedIn Member") return;
+
+        // Headline
+        const headEl = card.querySelector(".artdeco-entity-lockup__subtitle, .nt-card__subtext, .update-components-actor__description");
+        const headline = headEl ? headEl.innerText.trim() : "";
+
+        // Time
+        const timeEl = card.querySelector(".artdeco-entity-lockup__caption, .nt-card__time-text, .update-components-actor__sub-description");
+        const timeStr = timeEl ? timeEl.innerText.trim() : "";
+        const timestamp = parseViewTime(timeStr);
+
+        // Filter by Cutoff
+        if (timestamp < cutoffDate.getTime()) return;
+
+        // Link
+        const linkEl = card.querySelector("a.member-analytics-addon-entity-list__link, .nt-card__image-link, .update-components-actor__container-link");
+        let url = linkEl ? linkEl.href : "";
+        if (url) {
+            try {
+                const urlObj = new URL(url);
+                url = urlObj.origin + urlObj.pathname;
+            } catch (e) { }
+        }
+
+        const id = url || name.replace(/\s+/g, '_');
+
+        views.push({
+            id,
+            name,
+            headline,
+            url,
+            timeStr, // e.g. "Viewed 5d ago"
+            scrapedAt: Date.now(),
+            type: 'profile_view'
+        });
+    });
+
+    if (views.length > 0) {
+        console.log(`LinkBee: [PV] Extracted ${views.length} views (<= ${lookbackDays} days).`);
+        chrome.runtime.sendMessage({
+            type: "PROFILE_VIEWS_DATA",
+            data: views
+        });
+        showToast(`LinkBee: Found ${views.length} viewers!`, 3000);
+    } else {
+        console.log("LinkBee: [PV] No valid views found.");
+        showToast("LinkBee: No recent viewers found.", 3000);
     }
 }
 
@@ -465,10 +645,23 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     if (req.type === "TRIGGER_Sidebar_SCAN") {
         if (window.location.href.includes("messaging")) {
             syncRecentChats(); // Feature #1: Full Crawl
+        } else if (!window.location.href.includes("profile-views")) {
+            // Only scrape active conversation if we are NOT on profile views page
+            // (active conversation scraper is meant for overlay chats on other pages)
+            scrapeActiveConversation();
         } else {
-            scrapeActiveConversation(); // Just scrape current view
+            console.log("LinkBee: [SKIP] Sidebar scan skipped for Profile Views page.");
         }
         return; // Synchronous return
+    }
+
+    if (req.type === "TRIGGER_PROFILE_VIEWS_SCAN") {
+        if (window.location.href.includes("profile-views")) {
+            scrapeProfileViews();
+        } else {
+            console.warn("LinkBee: Not on profile views page.");
+        }
+        return;
     }
 
     if (req.type === "CHECK_STATUS") {

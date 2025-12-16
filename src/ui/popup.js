@@ -4,43 +4,49 @@ import { aiService } from '../utils/ai_service.js';
 document.addEventListener('DOMContentLoaded', init);
 
 // Tabs
+// Tabs
 const tabFollowups = document.getElementById('tab-followups');
+const tabProfileViews = document.getElementById('tab-profile-views');
 const tabReminders = document.getElementById('tab-reminders');
 const viewFollowups = document.getElementById('view-followups');
+const viewProfileViews = document.getElementById('view-profile-views');
 const viewReminders = document.getElementById('view-reminders');
 
 // Carousel State
 let currentCardIndex = 0;
 let currentFollowupItems = [];
+let currentProfileViews = [];
 
-if (tabFollowups && tabReminders) {
+if (tabFollowups && tabReminders && tabProfileViews) {
     tabFollowups.addEventListener('click', () => switchTab('followups'));
+    tabProfileViews.addEventListener('click', () => switchTab('profile_views'));
     tabReminders.addEventListener('click', () => switchTab('reminders'));
 }
 
 function switchTab(tab) {
+    // Reset all
+    [tabFollowups, tabProfileViews, tabReminders].forEach(t => {
+        t.classList.remove('active');
+        t.style.color = '#9ca3af';
+        t.style.borderBottomColor = 'transparent';
+    });
+    [viewFollowups, viewProfileViews, viewReminders].forEach(v => v.classList.add('hidden'));
+
     if (tab === 'followups') {
         tabFollowups.classList.add('active');
         tabFollowups.style.color = '#2563eb';
         tabFollowups.style.borderBottomColor = '#2563eb';
-
-        tabReminders.classList.remove('active');
-        tabReminders.style.color = '#9ca3af';
-        tabReminders.style.borderBottomColor = 'transparent';
-
         viewFollowups.classList.remove('hidden');
-        viewReminders.classList.add('hidden');
+    } else if (tab === 'profile_views') {
+        tabProfileViews.classList.add('active');
+        tabProfileViews.style.color = '#2563eb';
+        tabProfileViews.style.borderBottomColor = '#2563eb';
+        viewProfileViews.classList.remove('hidden');
     } else {
         tabReminders.classList.add('active');
         tabReminders.style.color = '#2563eb';
         tabReminders.style.borderBottomColor = '#2563eb';
-
-        tabFollowups.classList.remove('active');
-        tabFollowups.style.color = '#9ca3af';
-        tabFollowups.style.borderBottomColor = 'transparent';
-
         viewReminders.classList.remove('hidden');
-        viewFollowups.classList.add('hidden');
     }
 }
 
@@ -61,7 +67,7 @@ async function init() {
                 toggleAnalysisLoader(changes.isAnalyzing.newValue);
             }
             // Live Update: If data sources change, reload the view
-            if (changes.notifications || changes.conversations || changes.reminders) {
+            if (changes.notifications || changes.conversations || changes.reminders || changes.profileViews) {
                 loadData();
             }
         }
@@ -143,7 +149,7 @@ async function init() {
 }
 
 async function loadData() {
-    const data = await chrome.storage.local.get(['conversations', 'reminders', 'notifications']);
+    const data = await chrome.storage.local.get(['conversations', 'reminders', 'notifications', 'profileViews']);
     const convs = data.conversations || {};
     const totalScanned = Object.keys(convs).length;
     const notifications = data.notifications || {};
@@ -177,6 +183,12 @@ async function loadData() {
 
     currentFollowupItems = followups;
     renderFollowupsList(totalScanned); // Render List
+
+    // --- 1.5 Profile Views ---
+    const pViews = data.profileViews || {};
+    // Convert to array and sort by time (recency)
+    currentProfileViews = Object.values(pViews).sort((a, b) => (b.scrapedAt || 0) - (a.scrapedAt || 0));
+    renderProfileViewsList();
 
     // --- 2. Reminders (Top Level) ---
     // User Request: Show reminder data from reminders in local storage
@@ -351,6 +363,79 @@ function renderFollowupsList(totalScanned = 0) {
         list.appendChild(card);
     });
 }
+
+function renderProfileViewsList() {
+    const list = document.getElementById('profile-views-list');
+    const empty = document.getElementById('empty-state-profile-views');
+    list.innerHTML = '';
+
+    if (currentProfileViews.length === 0) {
+        list.classList.add('hidden');
+        empty.classList.remove('hidden');
+        empty.style.display = 'flex';
+        return;
+    }
+
+    list.classList.remove('hidden');
+    empty.classList.add('hidden');
+    empty.style.display = 'none';
+
+    currentProfileViews.forEach(view => {
+        const div = document.createElement('div');
+        div.className = 'glass-panel card-padding'; // Reusing existing card styles
+        div.style.marginBottom = '12px';
+
+        const initials = getInitials(view.name);
+        const relativeTime = view.timeStr || "Recently";
+
+        // AI Hook
+        const aiMsg = view.aiMessage || (view.aiStatus === 'pending' ? "Generating hook..." : "No hook generated.");
+        const isPending = view.aiStatus === 'pending';
+
+        div.innerHTML = `
+            <div style="display:flex; gap:12px; align-items:start;">
+                <div class="avatar">${initials}</div>
+                <div style="flex:1; min-width:0;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                        <h3 style="font-weight:600; font-size:0.9rem;">${view.name}</h3>
+                        <span style="font-size:0.75rem; color:#64748b;">${relativeTime}</span>
+                    </div>
+                    <p style="font-size:0.8rem; color:#475569; margin-bottom:8px;" class="truncate">${view.headline}</p>
+                    
+                    <div style="background:#f1f5f9; padding:8px; border-radius:6px; margin-bottom:8px;">
+                        <p style="font-size:0.85rem; color:#334155; font-style:italic;">
+                            ${isPending ? `<span class="loading-dots">Analyzing...</span>` : `"${aiMsg}"`}
+                        </p>
+                    </div>
+
+                    <div style="display:flex; gap:8px;">
+                         ${!isPending && view.aiMessage ? `
+                         <button class="btn-secondary copy-pv-btn" data-msg="${encodeURIComponent(view.aiMessage)}" style="padding:4px 8px; font-size:0.75rem;">
+                            Copy
+                         </button>` : ''}
+                         
+                         <a href="${view.url}" target="_blank" class="btn-primary" style="padding:4px 12px; font-size:0.75rem; text-decoration:none;">
+                            View Profile
+                         </a>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        if (!isPending && view.aiMessage) {
+            div.querySelector('.copy-pv-btn').addEventListener('click', (e) => {
+                const msg = decodeURIComponent(e.target.getAttribute('data-msg'));
+                navigator.clipboard.writeText(msg);
+                e.target.innerText = "Copied!";
+                setTimeout(() => e.target.innerText = "Copy", 1500);
+            });
+        }
+
+        list.appendChild(div);
+    });
+}
+
+
 
 function createCard(data) {
     const div = document.createElement('div');

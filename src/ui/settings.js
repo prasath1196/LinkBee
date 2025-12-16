@@ -3,12 +3,13 @@ document.addEventListener('DOMContentLoaded', initSettings);
 
 async function initSettings() {
     // 1. Load Settings
-    const data = await chrome.storage.local.get(['apiKey', 'aiProvider', 'analysisThreshold', 'syncDays']);
+    const data = await chrome.storage.local.get(['apiKey', 'aiProvider', 'analysisThreshold', 'syncDays', 'profileViewsDays']);
 
     if (data.apiKey) document.getElementById('api-key').value = data.apiKey;
     if (data.aiProvider) document.getElementById('provider-select').value = data.aiProvider;
     document.getElementById('analysisThreshold').value = data.analysisThreshold || 24;
     document.getElementById('syncDays').value = data.syncDays || 30;
+    document.getElementById('profileViewsDays').value = data.profileViewsDays || 14;
 
     // 2. Attach Listeners
     document.getElementById('save-btn').addEventListener('click', saveSettings);
@@ -29,6 +30,11 @@ async function saveSettings() {
     const apiKey = document.getElementById('api-key').value.trim();
     const threshold = parseInt(document.getElementById('analysisThreshold').value) || 24;
     const syncDays = parseInt(document.getElementById('syncDays').value) || 30;
+    let pvDays = parseInt(document.getElementById('profileViewsDays').value) || 14;
+
+    // Enforce Max 14 Days
+    if (pvDays > 14) pvDays = 14;
+    if (pvDays < 1) pvDays = 1;
 
     if (!apiKey) {
         showStatus("Please enter an API Key.", "text-red-500");
@@ -39,7 +45,8 @@ async function saveSettings() {
         aiProvider: provider,
         apiKey: apiKey,
         analysisThreshold: threshold,
-        syncDays: syncDays
+        syncDays: syncDays,
+        profileViewsDays: pvDays
     });
 
     showStatus("Settings saved!", "text-green-600");

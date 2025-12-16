@@ -1,6 +1,6 @@
-
 import { ALARM_NAME, CHECK_INTERVAL_MINUTES, reanalyzeStoredData } from './daily_check.js';
 import { handleNewConversation } from './handle_new_conversation.js';
+import { processProfileViews } from './process_profile_views.js';
 import { calculateBadge } from './badge_manager.js';
 import { storageMutex } from './mutex.js';
 
@@ -47,6 +47,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true; // Keep channel open
     }
 
+    // if (request.type === 'PROFILE_VIEWS_DATA') {
+    //     processProfileViews(request.data);
+    //     sendResponse({ success: true });
+    //     return true;
+    // }
+
     // 2. TRIGGER ACTIONS
     if (request.action === 'FORCE_SCAN') {
         chrome.tabs.query({ url: "https://www.linkedin.com/*" }, (tabs) => {
@@ -56,6 +62,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
             const targetTab = tabs.find(t => t.active) || tabs[0];
             chrome.tabs.sendMessage(targetTab.id, { type: "TRIGGER_Sidebar_SCAN" }).catch(() => { });
+            // chrome.tabs.sendMessage(targetTab.id, { type: "TRIGGER_PROFILE_VIEWS_SCAN" }).catch(() => { });
             sendResponse({ success: true });
         });
         return true;

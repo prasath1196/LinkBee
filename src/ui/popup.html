@@ -29,6 +29,7 @@
 
     <div class="tabs">
         <button id="tab-followups" class="tab active">Follow-ups</button>
+        <button id="tab-profile-views" class="tab" style="display: none;">Profile Views</button>
         <button id="tab-reminders" class="tab">Reminders</button>
     </div>
 
@@ -42,6 +43,17 @@
                 <div class="empty-icon">👋</div>
                 <p class="empty-title">No Follow-ups Found</p>
                 <p class="empty-sub">Sync to scan your LinkedIn messages.</p>
+            </div>
+        </div>
+
+        <div id="view-profile-views" class="view-section hidden">
+            <div id="profile-views-list"></div>
+            
+            <div id="empty-state-profile-views" class="empty-state hidden">
+                <div class="empty-icon">👀</div>
+                <p class="empty-title">No Views Yet</p>
+                <p class="empty-sub">Visit "Profile Views" on LinkedIn to track visitors.</p>
+                <a href="https://www.linkedin.com/me/profile-views/" target="_blank" class="btn-secondary" style="margin-top:12px; font-size:0.8rem;">Go to Page</a>
             </div>
         </div>
 
