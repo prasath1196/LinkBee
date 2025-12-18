@@ -15,33 +15,50 @@ class GeminiClient {
     }
 
     async generate(prompt, jsonMode = true) {
-        try {
-            const config = jsonMode ? { responseMimeType: "application/json" } : {};
-            const response = await this.client.models.generateContent({
-                model: this.model,
-                contents: [{ parts: [{ text: prompt }] }],
-                config: config
-            });
+        const MAX_RETRIES = 3;
+        let attempt = 0;
 
-            // Extract Text
-            let text = "";
-            if (response.text && typeof response.text === 'function') {
-                text = response.text();
-            } else if (response.candidates?.[0]?.content?.parts?.[0]?.text) {
-                text = response.candidates[0].content.parts[0].text;
-            } else {
-                text = JSON.stringify(response);
+        while (attempt < MAX_RETRIES) {
+            try {
+                const config = jsonMode ? { responseMimeType: "application/json" } : {};
+                const response = await this.client.models.generateContent({
+                    model: this.model,
+                    contents: [{ parts: [{ text: prompt }] }],
+                    config: config
+                });
+
+                // Extract Text
+                let text = "";
+                if (response.text && typeof response.text === 'function') {
+                    text = response.text();
+                } else if (response.candidates?.[0]?.content?.parts?.[0]?.text) {
+                    text = response.candidates[0].content.parts[0].text;
+                } else {
+                    text = JSON.stringify(response);
+                }
+
+                if (jsonMode) {
+                    const cleanJson = text.replace(/```json|```/g, '').trim();
+                    return JSON.parse(cleanJson);
+                }
+                return text;
+
+            } catch (e) {
+                attempt++;
+                const isOverloaded = e.message?.includes("503") || e.status === 503 || e.code === 503;
+                const isRateLimit = e.message?.includes("429") || e.status === 429 || e.code === 429;
+
+                if ((isOverloaded || isRateLimit) && attempt < MAX_RETRIES) {
+                    const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+                    console.warn(`[Gemini Client] Error ${e.status || 503}. Retrying in ${delay}ms... (Attempt ${attempt}/${MAX_RETRIES})`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue;
+                }
+
+                console.error("[Gemini Client] Error:", e);
+                // If we've exhausted retries or it's a fatal error, throw it
+                throw e;
             }
-
-            if (jsonMode) {
-                const cleanJson = text.replace(/```json|```/g, '').trim();
-                return JSON.parse(cleanJson);
-            }
-            return text;
-
-        } catch (e) {
-            console.error("[Gemini Client] Error:", e);
-            throw e;
         }
     }
 }

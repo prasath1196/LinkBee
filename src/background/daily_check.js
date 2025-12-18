@@ -5,8 +5,8 @@ import { updateAnalysisState } from './update_analysis_state.js';
 export const ALARM_NAME = 'linkbee_daily_check';
 export const CHECK_INTERVAL_MINUTES = 60 * 4; // Check every 4 hours
 
-export async function reanalyzeStoredData() {
-    console.log(`LinkBee: Re-analyzing stored data...`);
+export async function reanalyzeStoredData(force = false) {
+    console.log(`LinkBee: Re-analyzing stored data... (Force: ${force})`);
     updateAnalysisState(1); // Start global busy state
 
     try {
@@ -14,7 +14,8 @@ export async function reanalyzeStoredData() {
         const conversations = store.conversations || {};
         const apiKey = store.apiKey;
         const provider = store.aiProvider;
-        const threshold = store.analysisThreshold || 24;
+        // If Forced, use 0 threshold to bypass time checks
+        const threshold = force ? 0 : (store.analysisThreshold || 24);
 
         if (!apiKey) {
             console.log("LinkBee: No API Key found. Skipping analysis.");

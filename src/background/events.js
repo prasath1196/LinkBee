@@ -4,25 +4,34 @@ import { processProfileViews } from './process_profile_views.js';
 import { calculateBadge } from './badge_manager.js';
 import { storageMutex } from './mutex.js';
 
+// Side Panel Behavior Setup
+const setupSidePanel = () => {
+    if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
+        chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
+            .catch((error) => console.error("LinkBee: Failed to set panel behavior", error));
+    }
+};
+
+// Run immediately to ensure state is clear
+setupSidePanel();
+
 chrome.runtime.onInstalled.addListener(() => {
     console.log("LinkBee: Installed");
     chrome.alarms.create(ALARM_NAME, { periodInMinutes: CHECK_INTERVAL_MINUTES });
+    setupSidePanel();
 });
 
 chrome.runtime.onStartup.addListener(() => {
     console.log("LinkBee: Startup");
     chrome.storage.local.set({ isAnalyzing: false });
     reanalyzeStoredData();
+    setupSidePanel();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === ALARM_NAME) {
         reanalyzeStoredData();
     }
-});
-
-chrome.action.onClicked.addListener((tab) => {
-    chrome.sidePanel.open({ windowId: tab.windowId });
 });
 
 // ============================================================================
@@ -54,6 +63,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // }
 
     // 2. TRIGGER ACTIONS
+    if (request.type === 'ANALYZE_SAVED') {
+        console.log("LinkBee: [MANUAL] Analyze Saved triggered from UI");
+        reanalyzeStoredData(true);
+        sendResponse({ success: true });
+        return true;
+    }
+
     if (request.action === 'FORCE_SCAN') {
         chrome.tabs.query({ url: "https://www.linkedin.com/*" }, (tabs) => {
             if (tabs.length === 0) {
@@ -69,8 +85,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.type === 'SCAN_COMPLETED') {
-        console.log("LinkBee: Scan complete. Running analysis...");
-        setTimeout(() => { reanalyzeStoredData(); }, 1000);
+        console.log("LinkBee: Scan complete. Running analysis (FORCE)...");
+        setTimeout(() => { reanalyzeStoredData(true); }, 1000);
         // No response needed usually, but good practice
         sendResponse({ success: true });
         return true;
@@ -146,6 +162,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             storageMutex.unlock();
             sendResponse({ success: true });
         });
+        return true;
+    }
+
+    if (request.type === 'OPEN_SIDE_PANEL') {
+        if (sender.tab && sender.tab.windowId) {
+            chrome.sidePanel.open({ windowId: sender.tab.windowId })
+                .catch(err => console.error("LinkBee: Failed to open side panel from banner", err));
+            sendResponse({ success: true });
+        } else {
+            sendResponse({ success: false, error: "No window ID" });
+        }
         return true;
     }
 

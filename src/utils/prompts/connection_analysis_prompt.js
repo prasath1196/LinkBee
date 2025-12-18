@@ -69,13 +69,19 @@ export const CONNECTION_ANALYSIS_PROMPT = (contextText, decisionText, context) =
     - **NO:** If "Last Notification Based on Timeline" is recently set and no significant new context (messages) has occurred since then, output NO to avoid duplicate nudges.
     - **NO:** Hard rejection ("We filled the role") or Deferral date is still in FUTURE.
 
-    PHASE 4: DRAFTING (Engineering Context)
+    PHASE 4: DRAFTING & ARTIFACTS
     - **Tone:** Concise, low-friction, professional.
     - **Drafts:**
-    - * (A) Recruiter: "Hi [Name], circling back on this. Is the [Role Name] still open?"
-    - * (D) Senior: "Hi [Name], just following up on the resume I sent over. Any thoughts?"
-    - * (F) Deferral: "Hi [Name], checking in as discussed. You mentioned [Date/Event] might be a better time?"
-    - * (G) Dormant: "Hi [Name], hope you're well! I just shipped [Project/Feature] using [Tech Stack] and thought of our last chat about [Topic]. How are things at [Company]?"
+      - (A) Recruiter: "Hi [Name], circling back on this. Is the [Role Name] still open?"
+      - (D) Senior: "Hi [Name], just following up on the resume I sent over. Any thoughts?"
+      - (F) Deferral: "Hi [Name], checking in as discussed. You mentioned [Date/Event] might be a better time?"
+      - (G) Dormant: "Hi [Name], hope you're well! I just shipped [Project/Feature] using [Tech Stack] and thought of our last chat about [Topic]. How are things at [Company]?"
+
+    - **REMINDER LOGIC (CRITICAL):**
+      - **"Follow ups" vs "Reminders":** A "YES" decision adds the user to the Follow-up List (Good). A "Reminder" clutters the user's calendar/todo list (Bad, unless necessary).
+      - **Rule:** ONLY create a 'reminder' object if there is a **SPECIFIC TIME CONSTRAINT** explicitly mentioned by the *other person* (e.g., "Contact me next week", "Busy until Tuesday", "Check back in Q3").
+      - **Default:** For 90% of cases (including Strategc Pivots, Dormant Revivals, and Cold Follow-ups), set "reminder": null. The user will see it in the Follow-up list and decide when to act. 
+      - **Exception:** You may set a reminder if the user *must* take action by a hard deadline (e.g., "Apply before Friday").
 
     === OUTPUT FORMAT (JSON ONLY) ===
     {
@@ -85,6 +91,6 @@ export const CONNECTION_ANALYSIS_PROMPT = (contextText, decisionText, context) =
         "category": "Recruiter" | "Engineering Leader" | "Peer/Alumni" | "Other",
         "scenario_type": "Inbound Recovery" | "Cold Follow-up" | "Casual Intel" | "Senior Ask" | "Strategic Pivot" | "Timed Deferral" | "Dormant Revival" | "None",
         "sample_follow_up_message": "Draft a contextual message based on the identified scenario.",
-        "reminder": { "text": "Follow up on [Role/Referral]", "suggested_date": "YYYY-MM-DD" } or null
+        "reminder": { "text": "Check in regarding [Topic]", "suggested_date": "YYYY-MM-DD" } or null
     }
 `;

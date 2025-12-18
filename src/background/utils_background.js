@@ -1,5 +1,10 @@
 
-export function getConversationId(url, name, sender) {
+export function getConversationId(url, name, sender, urn) {
+    // 0. URN (Highest Priority for Cross-Page Mapping)
+    if (urn) {
+        return urn;
+    }
+
     // 1. Thread ID from URL
     if (url && url.includes("/thread/")) {
         const match = url.match(/thread\/([^/?#&]+)/);

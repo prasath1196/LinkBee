@@ -1,34 +1,39 @@
-console.log("LinkBee: Content script loaded");
-const CONFIG = {
-    // Containers
-    FULL_PAGE_CONTAINER: ".msg-s-message-list-content",
-    OVERLAY_CONTAINER: ".msg-overlay-conversation-bubble__content-wrapper",
-    SIDEBAR_LIST_ITEM: ".msg-conversation-listitem",
-    SELECTORS: {
-        LIST_ITEM: "li", // Chat rows are usually LIs
-        DATE_HEADER: ".msg-s-message-list__time-heading",
-        MESSAGE_BUBBLE: ".msg-s-event-listitem",
-        MESSAGE_BODY: ".msg-s-event-listitem__body",
-        SENDER_NAME: ".msg-s-message-group__name",
-        SENDER_LINK: ".msg-s-message-group__profile-link",
-        TIMESTAMP_GROUP: ".msg-s-message-group__timestamp",
-        // Sent messages often have a hidden specific timestamp
-        TIMESTAMP_EXACT: ".msg-s-event-with-indicator__sending-indicator",
-        IS_OTHER: ".msg-s-event-listitem--other", // Class present if sender is NOT me
-        CONVERSATION_TITLE: ".msg-entity-lockup__entity-title",
+import { SELECTORS, APP_CONSTANTS } from '../utils/constants.js';
 
-        // Profile Views Selectors (Best Guess based on standard LinkedIn)
-        PV_CARD: ".feed-shared-update-v2, .profile-view-card, li.nt-card", // Fallbacks
-        PV_NAME: ".update-components-actor__name, .nt-card__headline",
-        PV_HEADLINE: ".update-components-actor__description, .nt-card__subtext",
-        PV_TIME: ".update-components-actor__sub-description, .nt-card__time-text",
-        PV_LINK: ".update-components-actor__container-link, .nt-card__image-link"
-    }
+console.log("LinkBee: Content script loaded");
+
+// Backwards compatibility mapping if I don't want to replace every usage immediately,
+// or I can just update usages.
+// Let's rely on the imported SELECTORS directly. 
+// Note: The original code used CONFIG.FULL_PAGE_CONTAINER etc.
+// I will map them to a local CONFIG like object to match existing code structure for minimal diffs first?
+// Or better, just alias them.
+
+const CONFIG = {
+    ...SELECTORS,
+    SELECTORS: SELECTORS // Self-reference for nested usages like CONFIG.SELECTORS.LIST_ITEM
 };
 
+// Identify the Current User (For distinguishing "Me" vs "Them" in ambiguous chats)
+function scrapeCurrentUser() {
+    // LinkedIn Global Nav usually has the user's photo with alt text = Name
+    const img = document.querySelector(".global-nav__me-photo");
+    if (img && img.alt) {
+        const name = img.alt.trim();
+        if (name) {
+            console.log("LinkBee: Identified User as", name);
+            chrome.storage.local.set({ userProfile: { name: name } });
+        }
+    }
+}
+
+// ... (Variable decls)
 let observer = null;
 let debounceTimer = null;
 let isCrawling = false; // Flag to prevent observer loops during crawl
+let isAnalyzing = false; // Track AI Analysis state
+
+// ... (Rest of code)
 
 function scrapeActiveConversation(fromCrawler = false) {
     if (isCrawling && !fromCrawler) return; // Don't scrape individually if we are running a batch crawl
@@ -127,19 +132,91 @@ function scrapeActiveConversation(fromCrawler = false) {
     // 3. Metadata
     const lastMsg = messages[messages.length - 1];
 
-    // Find Title
+    // Find Title & URN
     let title = "Unknown";
-    // Selector for title might differ in overlay vs full page
+    let urn = null;
+
+    // Helper to extract URN from HREF
+    const getUrnFromUrl = (u) => {
+        if (!u || !u.includes("/in/")) return null;
+        const match = u.match(/\/in\/([^\/]+)\/?/);
+        return match ? match[1] : null;
+    };
+
     if (isOverlay) {
-        const header = container.closest(".msg-overlay-conversation-bubble")?.querySelector(".msg-overlay-bubble-header__title");
-        if (header) title = header.innerText.trim();
+        const bubble = container.closest(".msg-overlay-conversation-bubble");
+        if (bubble) {
+            const header = bubble.querySelector(".msg-overlay-bubble-header__title");
+            if (header) {
+                title = header.innerText.trim();
+                const link = header.querySelector("a");
+                urn = getUrnFromUrl(link?.href);
+            }
+        }
+
+        // FALLBACK: If scoped lookup failed but we are in overlay mode, find ANY visible overlay header
+        // This fixes cases where DOM nesting might be deeper or `closest` fails
+        if (!urn) {
+            const visibleHeader = Array.from(document.querySelectorAll(".msg-overlay-bubble-header__title"))
+                .find(h => h.offsetParent !== null && h.querySelector("a"));
+
+            if (visibleHeader) {
+                if (title === "Unknown") title = visibleHeader.innerText.trim();
+                const link = visibleHeader.querySelector("a");
+                urn = getUrnFromUrl(link?.href);
+                if (urn) console.log("LinkBee: [URN RECOVERY] Found URN via global visible header check");
+            }
+        }
     } else {
         const header = document.querySelector(CONFIG.SELECTORS.CONVERSATION_TITLE);
         if (header) title = header.innerText.trim();
+
+        const link = document.querySelector(".msg-thread__link-to-profile");
+        urn = getUrnFromUrl(link?.href);
+
+        // (Sidebar fallback removed as per user request)
+    }
+
+    // CLEANUP: Title often has newlines or multiple spaces
+    if (title && title !== "Unknown") {
+        title = title.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    // FALLBACK: If URN still null, check the message list for the OTHER person's profile link
+    if (!urn) {
+        // Iterate created messages to find the first "Them" sender
+        // Note: 'messages' is just data, we need to look at DOM or capture it during loop. 
+        // Re-scanning DOM for valid profile link:
+        const otherMsgItem = listItems.find(item => {
+            const msgEl = item.querySelector(CONFIG.SELECTORS.MESSAGE_BUBBLE);
+            if (!msgEl) return false;
+            return msgEl.classList.contains("msg-s-event-listitem--other");
+        });
+
+        if (otherMsgItem) {
+            const link = otherMsgItem.querySelector(CONFIG.SELECTORS.SENDER_LINK);
+            if (link) {
+                urn = getUrnFromUrl(link.href);
+                if (urn) console.log(`LinkBee: [URN FALLBACK] Found URN from message list: ${urn}`);
+            }
+
+            // Double fallback: some layouts put the link on the image
+            if (!urn) {
+                const imgLink = otherMsgItem.querySelector("a.msg-s-message-group__profile-link, a.ivm-image-view-model__link, .msg-facepile-grid__img");
+                // Note: facepile img often doesn't have href, but its parent might
+                // Let's check 'a' tags inside the group data
+                const anyLink = otherMsgItem.querySelector(`a[href*="/in/"]`);
+                if (anyLink) urn = getUrnFromUrl(anyLink.href);
+            }
+        }
     }
 
     if (title === "Unknown" || title === "Me") {
         if (!lastMsg.isMe) title = lastMsg.sender;
+    }
+
+    if (urn) {
+        console.log(`LinkBee: [URN MATCH] Scraped URN: ${urn} for ${title}`);
     }
 
     // 4. Send to Background
@@ -147,6 +224,7 @@ function scrapeActiveConversation(fromCrawler = false) {
         type: "NEW_CONVERSATION_DATA",
         data: {
             conversationName: title,
+            urn: urn, // UNIQUE IDENTIFIER
             history: messages,
             text: lastMsg.text,
             sender: lastMsg.sender,
@@ -173,9 +251,9 @@ async function scrapeProfileViews() {
 
     // 1. Get Settings
     const settings = await chrome.storage.local.get(['profileViewsDays']);
-    let lookbackDays = settings.profileViewsDays || 14;
+    let lookbackDays = settings.profileViewsDays || APP_CONSTANTS.DEFAULT_PROFILE_VIEWS_LOOKBACK;
     // Cap at 14 days as requested
-    if (lookbackDays > 14) lookbackDays = 14;
+    if (lookbackDays > APP_CONSTANTS.DEFAULT_PROFILE_VIEWS_LOOKBACK) lookbackDays = APP_CONSTANTS.DEFAULT_PROFILE_VIEWS_LOOKBACK;
 
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - lookbackDays);
@@ -252,7 +330,7 @@ async function scrapeProfileViews() {
                 console.log("LinkBee: [PV] No 'Show more' button found. End of list?");
                 // Try scrolling to bottom just in case it's infinite scroll without button
                 window.scrollTo(0, document.body.scrollHeight);
-                await new Promise(r => setTimeout(r, 1500));
+                await new Promise(r => setTimeout(r, APP_CONSTANTS.SCROLL_DELAY));
 
                 // If height didn't change much, we might be done
                 reachedCutoff = true; // Break loop
@@ -341,7 +419,7 @@ async function syncRecentChats() {
 
     // 0. Load Configuration
     const settings = await chrome.storage.local.get(['syncDays']);
-    const syncDays = settings.syncDays || 30; // Default to 30 days
+    const syncDays = settings.syncDays || APP_CONSTANTS.DEFAULT_SYNC_DAYS; // Default to 30 days
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - syncDays);
     cutoffDate.setHours(0, 0, 0, 0);
@@ -350,7 +428,7 @@ async function syncRecentChats() {
 
     // Reset sidebar to top
     sidebar.scrollTop = 0;
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, APP_CONSTANTS.SCROLL_DELAY));
 
     let items = Array.from(sidebar.querySelectorAll(CONFIG.SIDEBAR_LIST_ITEM));
 
@@ -513,7 +591,7 @@ function simulateClick(element) {
 }
 
 // Visual Helper
-function showToast(text, duration = 2000) {
+function showToast(text, duration = APP_CONSTANTS.TOAST_DURATION) {
     let toast = document.getElementById('linkbee-toast');
     if (!toast) {
         toast = document.createElement('div');
@@ -602,8 +680,22 @@ function parseRelativeDate(dateStr, timeStr) {
 // ============================================================================
 
 function init() {
+    // 0. Sync Status
+    scrapeCurrentUser();
+    chrome.storage.local.get(['isAnalyzing'], (res) => {
+        isAnalyzing = res.isAnalyzing || false;
+        checkBannerState();
+    });
+
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+        if (namespace === 'local' && changes.isAnalyzing) {
+            isAnalyzing = changes.isAnalyzing.newValue;
+            checkBannerState();
+        }
+    });
+
     // 1. Initial Scrape if on a chat
-    setTimeout(scrapeActiveConversation, 2000);
+    setTimeout(scrapeActiveConversation, APP_CONSTANTS.NAVIGATE_TIMEOUT / 10); // 2000ms
 
     // 2. Mutation Observer for Dynamic Messages (Feature #4 & #5)
     // We observe the body because LinkedIn is an SPA; entire sections might rerender.
@@ -633,11 +725,107 @@ function init() {
 
         if (shouldScrape) {
             clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(scrapeActiveConversation, 1500);
+            debounceTimer = setTimeout(scrapeActiveConversation, APP_CONSTANTS.SCROLL_DELAY);
         }
+
+        // Update UI State
+        checkBannerState();
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
+
+    // 3. Floating Banner (User Request)
+    createFloatingBanner();
+}
+
+// ============================================================================
+// UI OVERLAY (Floating Banner)
+// ============================================================================
+
+function createFloatingBanner() {
+    if (document.getElementById('linkbee-floating-banner')) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'linkbee-floating-banner';
+
+    // Icon
+    const iconUrl = chrome.runtime.getURL("assets/icon48.png");
+    banner.innerHTML = `<img src="${iconUrl}" alt="LinkBee" />`;
+
+    // Click Action: Open Side Panel + Show Status
+    banner.onclick = () => {
+        // 1. Notify Background to Open Panel
+        chrome.runtime.sendMessage({ type: "OPEN_SIDE_PANEL" });
+
+        // 2. Show Status Toast
+        const isCrawlingDef = typeof isCrawling !== 'undefined' ? isCrawling : false;
+        let status = 'Idle';
+        if (isCrawlingDef) status = 'Syncing...';
+        if (isAnalyzing) status = 'Analyzing (AI)...';
+
+        showToast(`LinkBee is Active. Status: ${status}`, 3000);
+    };
+
+    document.body.appendChild(banner);
+
+    // Inject CSS
+    const style = document.createElement('style');
+    style.innerHTML = `
+        #linkbee-floating-banner {
+            position: fixed;
+            top: 50%;
+            right: 0;
+            transform: translateY(-50%);
+            width: 40px;
+            height: 40px;
+            background-color: #333;
+            border-radius: 8px 0 0 8px;
+            box-shadow: -2px 0 5px rgba(0,0,0,0.2);
+            z-index: 999999;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            opacity: 0.8;
+        }
+        #linkbee-floating-banner:hover {
+            width: 50px;
+            opacity: 1;
+        }
+        #linkbee-floating-banner img {
+            width: 24px;
+            height: 24px;
+            pointer-events: none;
+        }
+        /* Active Glow State */
+        #linkbee-floating-banner.linkbee-active-glow {
+            background-color: #0a66c2; /* LinkedIn Blue */
+            box-shadow: 0 0 15px #0a66c2, inset 0 0 5px rgba(255,255,255,0.5);
+            width: 45px;
+            opacity: 1;
+        }
+    `;
+    document.head.appendChild(style);
+
+    // Initial Check
+    checkBannerState();
+}
+
+function checkBannerState() {
+    const banner = document.getElementById('linkbee-floating-banner');
+    if (!banner) return;
+
+    // Condition: Glow ONLY when Analyzing (User Request)
+    if (isAnalyzing) {
+        if (!banner.classList.contains('linkbee-active-glow')) {
+            banner.classList.add('linkbee-active-glow');
+        }
+    } else {
+        if (banner.classList.contains('linkbee-active-glow')) {
+            banner.classList.remove('linkbee-active-glow');
+        }
+    }
 }
 
 // Listen for Messages from Popup/Background
@@ -700,7 +888,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         // ASYNC SEARCH LOOP
         (async () => {
             const startTime = Date.now();
-            const timeout = 20000; // Increased to 20s
+            const timeout = APP_CONSTANTS.NAVIGATE_TIMEOUT; // Increased to 20s
 
             sidebar.scrollTop = 0;
             await new Promise(r => setTimeout(r, 600));
