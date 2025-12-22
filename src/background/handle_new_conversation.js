@@ -1,7 +1,7 @@
-
 import { getConversationId, updateConversationHistory } from './utils_background.js';
 import { analyzeConversation } from './analyze_conversations.js';
 import { calculateBadge } from './badge_manager.js';
+import { generateHistoryHash } from '../utils/hash.js';
 
 export async function handleNewConversation(data, sendResponse) {
     console.log("LinkBee: [BACKGROUND] Received Data", data.conversationName, data.text?.substring(0, 10));
@@ -92,13 +92,16 @@ export async function handleNewConversation(data, sendResponse) {
     // 2. DETECT & UPDATE HISTORY
     const historyChanged = updateConversationHistory(existing, history, text);
 
+    // HASH GENERATION
+    existing.currentHash = generateHistoryHash(existing.history);
+
     existing.lastMessage = text;
     existing.lastTimestamp = timestamp;
     existing.lastSenderIsMe = isMe;
 
     if (historyChanged) {
         existing.history_changed_since_analyzed = true;
-        console.log(`LinkBee: History changed for ${targetName}`);
+        console.log(`LinkBee: History changed for ${targetName} (Hash: ${existing.currentHash})`);
     }
 
     if (isMe) existing.status = 'active';

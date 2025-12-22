@@ -15,9 +15,12 @@ export default defineConfig({
     },
   },
   build: {
-    // CRXJS handles the inputs via manifest.json
-    // We can just keep default build settings or tweak outDir if needed
     outDir: 'dist',
-    emptyOutDir: true
-  }
+    emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        debug: resolve(__dirname, 'src/ui/debug.html'),
+      },
+    },
+  },
 });

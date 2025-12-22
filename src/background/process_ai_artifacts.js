@@ -33,7 +33,13 @@ export async function processAiArtifacts(conv, result) {
         const notifications = nStore.notifications || [];
 
         // Dedupe notifications for this conversation
+        // STRICT: If notification exists, DO NOT create a new one (Spam Prevention)
         const alreadyNotified = notifications.find(n => n.conversationId === conv.id);
+
+        if (alreadyNotified) {
+            console.log(`LinkBee: [SKIP] Notification already active for ${conv.name}`);
+            return;
+        }
 
         if (!alreadyNotified) {
             // Prepare payload: Full conv data except heavy history
@@ -51,8 +57,12 @@ export async function processAiArtifacts(conv, result) {
                 analysisDate: Date.now(), // Track when this specific analysis decision was made
                 ...conversationData // Include all other AI fields and metadata
             });
+
+            // Update Conversation with Hash Lock
+            conv.lastNotificationHash = conv.currentHash;
+
             await chrome.storage.local.set({ notifications });
-            console.log(`LinkBee: [SAVED] Notification created for ${conv.name}`);
+            console.log(`LinkBee: [SAVED] Notification created for ${conv.name} (Hash Lock: ${conv.lastNotificationHash})`);
         }
     } else {
         conv.needsAction = false;

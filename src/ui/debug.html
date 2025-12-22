@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LinkBee Debug</title>
+    <link href="./globals.css" rel="stylesheet">
+    <style>
+        body { font-family: monospace; background: #0f172a; color: #f8fafc; padding: 20px; }
+        .json-key { color: #93c5fd; }
+        .json-string { color: #86efac; }
+        .json-number { color: #fca5a5; }
+        .json-boolean { color: #f9a8d4; }
+        .json-null { color: #94a3b8; }
+        .collapsible { cursor: pointer; user-select: none; }
+        .collapsible::before { content: '▶'; display: inline-block; margin-right: 5px; transform: rotate(90deg); transition: transform 0.2s; font-size: 0.8em; }
+        .collapsed::before { transform: rotate(0deg); }
+        .collapsed + ul { display: none; }
+        ul { list-style: none; padding-left: 20px; margin: 0; }
+        .controls { position: sticky; top: 0; background: #0f172a; padding: 10px 0; border-bottom: 1px solid #334155; margin-bottom: 20px; z-index: 100; display: flex; gap: 10px; }
+        button { background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-family: inherit; }
+        button:hover { background: #2563eb; }
+        button.secondary { background: #475569; }
+        button.secondary:hover { background: #334155; }
+        h1 { margin: 0; font-size: 1.5rem; }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <h1>LinkBee Data Visualizer</h1>
+        <div style="flex-grow: 1;"></div>
+        <button id="refresh-btn">Refresh Data</button>
+        <button id="clear-logs-btn" class="secondary">Clear Logs</button>
+         <button id="clear-all-btn" class="secondary" style="background:#ef4444;">Clear All Data</button>
+    </div>
+    <div id="json-container">Loading...</div>
+    <script src="debug.js"></script>
+</body>
+</html>

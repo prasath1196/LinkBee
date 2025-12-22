@@ -15,7 +15,7 @@ export async function reanalyzeStoredData(force = false) {
         const apiKey = store.apiKey;
         const provider = store.aiProvider;
         // If Forced, use 0 threshold to bypass time checks
-        const threshold = force ? 0 : (store.analysisThreshold || 24);
+        const threshold = force ? 0 : (store.analysisThreshold || 4);
 
         if (!apiKey) {
             console.log("LinkBee: No API Key found. Skipping analysis.");

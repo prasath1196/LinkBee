@@ -7,7 +7,7 @@ async function initSettings() {
 
     if (data.apiKey) document.getElementById('api-key').value = data.apiKey;
     if (data.aiProvider) document.getElementById('provider-select').value = data.aiProvider;
-    document.getElementById('analysisThreshold').value = data.analysisThreshold || 24;
+    document.getElementById('analysisThreshold').value = data.analysisThreshold || 4;
     document.getElementById('syncDays').value = data.syncDays || 30;
     document.getElementById('profileViewsDays').value = data.profileViewsDays || 14;
 
@@ -28,7 +28,7 @@ async function initSettings() {
 async function saveSettings() {
     const provider = document.getElementById('provider-select').value;
     const apiKey = document.getElementById('api-key').value.trim();
-    const threshold = parseInt(document.getElementById('analysisThreshold').value) || 24;
+    const threshold = parseInt(document.getElementById('analysisThreshold').value) || 4;
     const syncDays = parseInt(document.getElementById('syncDays').value) || 30;
     let pvDays = parseInt(document.getElementById('profileViewsDays').value) || 14;
 
