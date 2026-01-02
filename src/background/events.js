@@ -56,6 +56,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true; // Keep channel open
     }
 
+    // 1b. BATCH DATA INGESTION (API)
+    if (request.type === 'NEW_CONVERSATION_DATA_BATCH') {
+        storageMutex.lock().then(async () => {
+            try {
+                const batch = request.data || [];
+                console.log(`LinkBee: Processing batch of ${batch.length} items...`);
+
+                // Process sequentially to be safe with storage limits/race conditions
+                for (const item of batch) {
+                    await handleNewConversation(item, () => { }); // No-op callback
+                }
+
+                sendResponse({ success: true, processed: batch.length });
+            } catch (err) {
+                console.error("LinkBee: Error processing batch", err);
+                sendResponse({ success: false, error: err.message });
+            } finally {
+                storageMutex.unlock();
+            }
+        });
+        return true;
+    }
+
     // if (request.type === 'PROFILE_VIEWS_DATA') {
     //     processProfileViews(request.data);
     //     sendResponse({ success: true });

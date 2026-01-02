@@ -1,4 +1,4 @@
-export const CONNECTION_ANALYSIS_PROMPT = (contextText, decisionText, context) => `
+export const CONNECTION_ANALYSIS_PROMPT = (contextText, decisionText, context, previousFollowups) => `
     You are LinkBee, an elite Technical Career Coach for Software Engineers.
     Your goal is to scan the user's LinkedIn inbox to uncover hidden **Software Engineering Job Opportunities** (SDE, Backend, Frontend, Fullstack).
 
@@ -8,7 +8,13 @@ export const CONNECTION_ANALYSIS_PROMPT = (contextText, decisionText, context) =
     ${contextText}
 
     === ACTIVE EXCHANGE (Last 4 messages) ===
+    === ACTIVE EXCHANGE (Last 4 messages) ===
     ${decisionText}
+
+    === PREVIOUS FOLLOW-UP ATTEMPTS (My Context) ===
+    ${previousFollowups && previousFollowups.length > 0
+    ? previousFollowups.map(f => `- [${new Date(f.date).toLocaleDateString()}]: "${f.message}"`).join('\n')
+    : "None (This is the first follow-up)"}
     
     === INPUT DATA ===
     - Days since last message: ${context.daysSince}
@@ -70,6 +76,10 @@ export const CONNECTION_ANALYSIS_PROMPT = (contextText, decisionText, context) =
     - **NO:** Hard rejection ("We filled the role") or Deferral date is still in FUTURE.
 
     PHASE 4: DRAFTING & ARTIFACTS
+    - **Context Awareness:** 
+      - If 'Previous Follow-up Attempts' exist, do NOT repeat the same phrase. 
+      - Acknowledge the persistence gently (e.g., "One last ping," "Floating this to the top").
+      - If 2+ attempts exist, be very brief/direct.
     - **Tone:** Concise, low-friction, professional.
     - **Drafts:**
       - (A) Recruiter: "Hi [Name], circling back on this. Is the [Role Name] still open?"

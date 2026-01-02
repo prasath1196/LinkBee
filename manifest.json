@@ -43,8 +43,12 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["assets/*.png", "src/ui/debug.html"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "assets/*.png", 
+        "src/ui/debug.html",
+        "src/content/api_observer.js"
+      ],
+      "matches": ["https://www.linkedin.com/*"]
     }
   ]
 }

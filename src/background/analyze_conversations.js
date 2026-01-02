@@ -57,6 +57,9 @@ export async function analyzeConversation(conv, apiKey, provider, thresholdHours
     const lastNotifHash = conv.lastNotificationHash;
     const GHOSTING_CHECK_INTERVAL_HOURS = 24;
 
+    // Calulate Time Since Last Analysis
+    const hoursSinceLastCheck = (now - (conv.lastAnalyzed || 0)) / (1000 * 60 * 60);
+
     let shouldAnalyze = false;
     let triggerReason = "";
 

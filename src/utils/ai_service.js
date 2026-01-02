@@ -86,7 +86,7 @@ class AIService {
                 decisionText = `[Last Message]: "${context.lastMessage}"`;
             }
 
-            const prompt = CONNECTION_ANALYSIS_PROMPT(contextText, decisionText, context);
+            const prompt = CONNECTION_ANALYSIS_PROMPT(contextText, decisionText, context, context.previous_followups);
 
             console.log("[LinkBee AI] Analyzing Conversation...");
             const result = await client.generate(prompt, true);

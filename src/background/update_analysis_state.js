@@ -8,3 +8,8 @@ export function updateAnalysisState(change) {
     const isAnalyzing = activeAnalysisCount > 0;
     chrome.storage.local.set({ isAnalyzing });
 }
+
+export function forceResetAnalysisState() {
+    activeAnalysisCount = 0;
+    chrome.storage.local.set({ isAnalyzing: false });
+}
