@@ -1,6 +1,7 @@
 import { analyzeConversation } from './analyze_conversations.js';
 import { calculateBadge } from './badge_manager.js';
 import { updateAnalysisState, forceResetAnalysisState } from './update_analysis_state.js';
+import { typedStorage } from '../services/storage.js';
 
 export const ALARM_NAME = 'linkbee_daily_check';
 export const CHECK_INTERVAL_MINUTES = 60 * 4; // Check every 4 hours
@@ -10,12 +11,11 @@ export async function reanalyzeStoredData(force = false) {
     updateAnalysisState(1); // Start global busy state
 
     try {
-        const store = await chrome.storage.local.get(['conversations', 'apiKey', 'aiProvider', 'analysisThreshold']);
-        const conversations = store.conversations || {};
-        const apiKey = store.apiKey;
-        const provider = store.aiProvider;
+        const { apiKey, aiProvider, analysisThreshold } = await typedStorage.getSettings();
+        const conversations = await typedStorage.getConversations();
+
         // If Forced, use 0 threshold to bypass time checks
-        const threshold = force ? 0 : (store.analysisThreshold || 4);
+        const threshold = force ? 0 : (analysisThreshold || 4);
 
         if (!apiKey) {
             console.log("LinkBee: No API Key found. Skipping analysis.");
@@ -24,23 +24,30 @@ export async function reanalyzeStoredData(force = false) {
 
         let actionCount = 0;
 
-        for (const id in conversations) {
-            const conv = conversations[id];
-
+        for (const conv of conversations) {
             // Criteria: Me sent last (waiting for reply) OR Active & History Changed
             if (conv.status === 'replied' || conv.status === 'dismissed') continue;
             if (!conv.lastSenderIsMe) continue;
 
             // Note: analyzeConversation handles its own local state increments too, which is fine (nested 1->2->1)
             try {
-                await analyzeConversation(conv, apiKey, provider, threshold);
+                // Determine if we should save: Check state before?
+                // analyzeConversation modifies in place.
+                // We'll trust that if it didn't throw, we should re-save to capture decision/logs.
+                // Optimally, analyzeConversation should return boolean 'modified'.
+                // But blindly saving active conversations during a daily check is acceptable overhead.
+
+                await analyzeConversation(conv, apiKey, aiProvider, threshold);
+
+                // Persist the individual conversation update
+                await typedStorage.saveConversation(conv);
+
                 if (conv.needsAction) actionCount++;
             } catch (innerErr) {
-                console.error(`LinkBee: Failed to analyze ${id}`, innerErr);
+                console.error(`LinkBee: Failed to analyze ${conv.id}`, innerErr);
             }
         }
 
-        await chrome.storage.local.set({ conversations });
         calculateBadge();
     } catch (err) {
         console.error("LinkBee: Daily check invalid", err);

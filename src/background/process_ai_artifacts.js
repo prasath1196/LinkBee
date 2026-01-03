@@ -1,9 +1,9 @@
+import { typedStorage } from '../services/storage.js';
 
 export async function processAiArtifacts(conv, result) {
     // 1. Handle Reminders
     if (result.reminder && result.reminder.text) {
-        const rStore = await chrome.storage.local.get('reminders');
-        const reminders = rStore.reminders || [];
+        const reminders = await typedStorage.getReminders();
 
         // Dedupe active AI reminders for this thread
         const hasPending = reminders.some(r =>
@@ -20,7 +20,7 @@ export async function processAiArtifacts(conv, result) {
                 source: 'ai',
                 status: 'pending'
             });
-            await chrome.storage.local.set({ reminders });
+            await typedStorage.saveReminders(reminders);
             console.log(`LinkBee: [SAVED] AI Reminder added for ${conv.name}`);
         }
     }
@@ -29,8 +29,7 @@ export async function processAiArtifacts(conv, result) {
     if (result.decision === "YES") {
         conv.needsAction = true;
 
-        const nStore = await chrome.storage.local.get('notifications');
-        const notifications = nStore.notifications || [];
+        const notifications = await typedStorage.getNotifications();
 
         // Dedupe notifications for this conversation
         // STRICT: If notification exists, DO NOT create a new one (Spam Prevention)
@@ -41,29 +40,27 @@ export async function processAiArtifacts(conv, result) {
             return;
         }
 
-        if (!alreadyNotified) {
-            // Prepare payload: Full conv data except heavy history
-            const { history, ...conversationData } = conv;
+        // Prepare payload: Full conv data except heavy history
+        const { history, ...conversationData } = conv;
 
-            notifications.push({
-                id: crypto.randomUUID(),
-                conversationId: conv.id,
-                name: conv.name,
-                message: result.sample_follow_up_message || "Time to follow up!",
-                reason: result.reason,
-                category: conv.aiCategory || "General",
-                timestamp: Date.now(),
-                url: conv.url || "https://www.linkedin.com/messaging/",
-                analysisDate: Date.now(), // Track when this specific analysis decision was made
-                ...conversationData // Include all other AI fields and metadata
-            });
+        notifications.push({
+            id: crypto.randomUUID(),
+            conversationId: conv.id,
+            name: conv.name,
+            message: result.sample_follow_up_message || "Time to follow up!",
+            reason: result.reason,
+            category: conv.aiCategory || "General",
+            timestamp: Date.now(),
+            url: conv.url || "https://www.linkedin.com/messaging/",
+            analysisDate: Date.now(), // Track when this specific analysis decision was made
+            ...conversationData // Include all other AI fields and metadata
+        });
 
-            // Update Conversation with Hash Lock
-            conv.lastNotificationHash = conv.currentHash;
+        // Update Conversation with Hash Lock
+        conv.lastNotificationHash = conv.currentHash;
 
-            await chrome.storage.local.set({ notifications });
-            console.log(`LinkBee: [SAVED] Notification created for ${conv.name} (Hash Lock: ${conv.lastNotificationHash})`);
-        }
+        await typedStorage.saveNotifications(notifications);
+        console.log(`LinkBee: [SAVED] Notification created for ${conv.name} (Hash Lock: ${conv.lastNotificationHash})`);
     } else {
         conv.needsAction = false;
     }

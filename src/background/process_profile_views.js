@@ -1,4 +1,5 @@
 import { aiService } from '../utils/ai_service.js';
+import { typedStorage } from '../services/storage.js';
 
 /**
  * processProfileViews
@@ -9,8 +10,8 @@ export async function processProfileViews(newViews) {
 
     console.log(`LinkBee: [BG] Processing ${newViews.length} profile views...`);
 
-    const storage = await chrome.storage.local.get(['profileViews', 'aiProvider', 'apiKey']);
-    let storedViews = storage.profileViews || {};
+    const { aiProvider, apiKey } = await typedStorage.getSettings();
+    let storedViews = await typedStorage.getProfileViews();
     let changed = false;
 
     // Filter for new or updated views
@@ -36,7 +37,7 @@ export async function processProfileViews(newViews) {
     });
 
     if (changed) {
-        await chrome.storage.local.set({ profileViews: storedViews });
+        await typedStorage.saveProfileViews(storedViews);
 
         // Notify UI to update if open
         chrome.runtime.sendMessage({ type: "PROFILE_VIEWS_UPDATED" }).catch(() => { });
@@ -46,7 +47,7 @@ export async function processProfileViews(newViews) {
         console.log(`LinkBee: [AI] ${viewsToAnalyze.length} new profile views to analyze.`);
 
         // Process in background
-        analyzeProfileViews(viewsToAnalyze, storage.aiProvider || 'openai', storage.apiKey);
+        analyzeProfileViews(viewsToAnalyze, aiProvider || 'openai', apiKey);
     }
 }
 
@@ -70,15 +71,14 @@ async function analyzeProfileViews(views, provider, apiKey) {
             });
 
             // Update Storage
-            const storage = await chrome.storage.local.get(['profileViews']);
-            const currentViews = storage.profileViews || {};
+            const currentViews = await typedStorage.getProfileViews();
 
             if (currentViews[view.id]) {
                 currentViews[view.id].aiMessage = aiResponse.suggestion;
                 currentViews[view.id].aiStatus = 'done';
                 currentViews[view.id].analyzedAt = Date.now();
 
-                await chrome.storage.local.set({ profileViews: currentViews });
+                await typedStorage.saveProfileViews(currentViews);
 
                 // Notify UI
                 chrome.runtime.sendMessage({ type: "PROFILE_VIEWS_UPDATED" }).catch(() => { });

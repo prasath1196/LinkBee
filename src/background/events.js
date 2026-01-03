@@ -1,5 +1,6 @@
 import { ALARM_NAME, CHECK_INTERVAL_MINUTES, reanalyzeStoredData } from './daily_check.js';
 import { handleNewConversation } from './handle_new_conversation.js';
+import { transformApiData } from './api_parser.js';
 import { processProfileViews } from './process_profile_views.js';
 import { calculateBadge } from './badge_manager.js';
 import { storageMutex } from './mutex.js';
@@ -40,7 +41,49 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
-    // 1. DATA INGESTION
+    // 0. RAW API PARSING (New Architecture)
+    if (request.type === 'RAW_API_PAYLOAD') {
+        const { data, currentUser } = request;
+
+        // Async Processing
+        (async () => {
+            // Fetch User Profile from Storage (if available) to help ID resolution
+            const result = await chrome.storage.local.get(['userProfile']);
+
+            // Use passed currentUser if storage is empty (First run optimization)
+            const userProfile = result.userProfile || (currentUser ? { name: currentUser } : null);
+
+            // If we learned the name from the content script, save it for future
+            if (!result.userProfile && currentUser) {
+                await chrome.storage.local.set({ userProfile: { name: currentUser } });
+            }
+
+            // console.log("LinkBee: [BACKGROUND] Processing API Payload", { hasData: !!data, userProfile });
+
+            try {
+                const conversations = transformApiData(data, userProfile);
+                console.log("LinkBee: [BACKGROUND] Parsed Batch", conversations);
+                if (conversations && conversations.length > 0) {
+                    // Process sequentially to be safe
+                    for (const conv of conversations) {
+                        await storageMutex.lock().then(async () => {
+                            try {
+                                await handleNewConversation(conv);
+                            } finally {
+                                storageMutex.unlock();
+                            }
+                        });
+                    }
+                }
+            } catch (err) {
+                console.error("LinkBee: API Parse Error", err);
+            }
+        })();
+
+        return true; // Keep channel open (though we don't strictly need to sendResponse)
+    }
+
+    // 1. DATA INGESTION (Legacy/Internal)
     if (request.type === 'NEW_CONVERSATION_DATA') {
         storageMutex.lock().then(async () => {
             try {
@@ -78,12 +121,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true;
     }
-
-    // if (request.type === 'PROFILE_VIEWS_DATA') {
-    //     processProfileViews(request.data);
-    //     sendResponse({ success: true });
-    //     return true;
-    // }
 
     // 2. TRIGGER ACTIONS
     if (request.type === 'ANALYZE_SAVED') {

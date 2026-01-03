@@ -1,10 +1,16 @@
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { extension } from '../api/extension'
 import { queryClient } from '../lib/queryClient'
-import { StorageSchema, AppNotification, AppConversation } from '../types/storage'
+import { Notification, StoredConversation } from '../../types/storage'
 
-export interface FollowupItem extends AppNotification {
-    // UI-specific computed properties can go here (or we can just reuse AppNotification)
+// Define local aggregate for UI state (Mirroring what extension.storage.get returns)
+interface StorageSchema {
+    conversations?: Record<string, StoredConversation>;
+    notifications?: Record<string, Notification> | Notification[];
+}
+
+export interface FollowupItem extends Notification {
+    // UI-specific computed properties can go here (or we can just reuse Notification)
 }
 
 export function useFollowups() {
@@ -12,8 +18,8 @@ export function useFollowups() {
         queryKey: ['followups'],
         queryFn: async () => {
             const data = await extension.storage.get<StorageSchema>(['conversations', 'notifications'])
-            const notifications = (data.notifications || {}) as Record<string, AppNotification>
-            const convs = (data.conversations || {}) as Record<string, AppConversation>
+            const notifications = (data.notifications || {}) as Record<string, Notification>
+            const convs = (data.conversations || {}) as Record<string, StoredConversation>
 
             return Object.values(notifications).map((n) => {
                 const c = convs[n.conversationId] || {}
@@ -23,8 +29,18 @@ export function useFollowups() {
                 // improved URL resolution
                 let threadUrl = "https://www.linkedin.com/messaging/"; // Default
 
-                // 1. Explicit Thread URL (Highest Priority)
-                if (c.url && c.url.includes('/messaging/thread/')) {
+                // 0. Explicit Thread URN (The Gold Standard)
+                const threadUrn = c.threadUrn || n.threadUrn;
+                if (threadUrn) {
+                    // Extract ID part if it's a full URN (urn:li:messagingThread:2-abc...)
+                    const threadId = threadUrn.includes("messagingThread:")
+                        ? threadUrn.split("messagingThread:")[1]
+                        : threadUrn;
+
+                    threadUrl = `https://www.linkedin.com/messaging/thread/${threadId}/`;
+                }
+                // 1. Explicit Thread URL (Highest Priority from stored URL)
+                else if (c.url && c.url.includes('/messaging/thread/')) {
                     threadUrl = c.url;
                 }
                 else if (n.url && n.url.includes('/messaging/thread/')) {
@@ -47,12 +63,13 @@ export function useFollowups() {
                 }
 
                 return {
-                    id: n.id, // Notification ID (AppNotification)
-                    conversationId: n.conversationId, // AppNotification
+                    id: String(n.id || crypto.randomUUID()), // Ensure ID exists
+                    conversationId: n.conversationId,
                     name: name,
+                    status: n.status || 'pending', // Required by Notification Schema
                     reason: n.reason || n.aiReason || "Follow-up suggested",
                     category: n.category || n.aiCategory || "Follow-up",
-                    aiSampleMessage: n.aiSampleMessage || n.sampleMessage,
+                    aiSampleMessage: n.aiSampleMessage,
                     timestamp: n.timestamp,
                     url: threadUrl
                 } as FollowupItem

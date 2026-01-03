@@ -1,7 +1,7 @@
+import { typedStorage } from '../services/storage.js';
 
 export async function calculateBadge() {
-    const store = await chrome.storage.local.get(['notifications']);
-    const notifications = store.notifications || [];
+    const notifications = await typedStorage.getNotifications();
     updateBadge(notifications.length);
 }
 

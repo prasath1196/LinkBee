@@ -1,4 +1,19 @@
-import { StorageSchema } from '../types/storage';
+// Define a loose schema for local API inference if needed, or alias Settings
+// Actually, StorageSchema in extension.ts was an interface that included everything (Settings, Data, Logs).
+// I should define an interface that resembles the old StorageSchema roughly, or import partials.
+// But strict typing here might be tricky if I don't import everything.
+// Let's import all and composite them.
+import { Settings as BackendSettings, StoredConversation, Notification, Reminder, AiAnalysisLog } from '../../types/storage';
+
+export interface StorageSchema extends BackendSettings {
+    conversations?: Record<string, StoredConversation>;
+    notifications?: Record<string, Notification> | Notification[];
+    reminders?: Reminder[];
+    analysisLogs?: AiAnalysisLog[];
+    // State
+    isAnalyzing?: boolean;
+    lastSyncTimestamp?: number;
+}
 
 export const extension = {
     storage: {

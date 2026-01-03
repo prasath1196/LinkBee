@@ -2,9 +2,14 @@ import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { extension } from '../api/extension'
 import { queryClient } from '../lib/queryClient'
-import { StorageSchema, AppSettings, AiProvider } from '../types/storage'
+import { Settings as BackendSettings, AiProvider } from '../../types/storage'
 
-export interface Settings extends AppSettings {
+// Local Schema Definition for UI access
+interface StorageSchema extends BackendSettings {
+    // Add any UI-specific or legacy fields if strictly needed, otherwise mirrors BackendSettings
+}
+
+export interface Settings extends BackendSettings {
     autoScan: boolean // Legacy mapping or UI preference
 }
 

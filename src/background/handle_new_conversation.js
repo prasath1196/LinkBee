@@ -2,14 +2,19 @@ import { getConversationId, updateConversationHistory } from './utils_background
 import { analyzeConversation } from './analyze_conversations.js';
 import { calculateBadge } from './badge_manager.js';
 import { generateHistoryHash } from '../utils/hash.js';
+import { typedStorage } from '../services/storage.js';
 
 export async function handleNewConversation(data, sendResponse) {
-    console.log("LinkBee: [BACKGROUND] Received Data", data.title || data.conversationName);
+    console.log("LinkBee: [BACKGROUND] Received Data", data);
 
     // --- API NORMALIZATION START ---
+    const myProfile = await typedStorage.getUserProfile();
+    const myName = myProfile?.name;
+
     let {
         text, sender, isMe, timestamp, conversationName,
-        history, url, urn, senderUrn, title, isSponsored
+        history, url, urn, senderUrn, title, isSponsored,
+        participants, threadUrn // Parse threadUrn directly if available
     } = data;
 
     // 1. Normalize Title/Name
@@ -41,6 +46,38 @@ export async function handleNewConversation(data, sendResponse) {
             dateHeader: new Date(timestamp).toLocaleDateString() // Mock header
         }];
     }
+
+    // 4. Extract Metadata from Participants (Headline, Distance, Image)
+    let headline = "";
+    let distance = "";
+    let imgUrl = "";
+    let isPremium = false;
+
+    if (participants && participants.length > 0) {
+        // Find the partner (Filter out Me)
+        // 1. Try to find someone who is NOT me (name check or distance check)
+        let partner = participants.find(p => p.name !== myName && p.distance !== "SELF" && p.distance !== "You");
+
+        // 2. Fallback: If no other found (e.g. self-chat?), take the first one, but be careful.
+        // Actually, if it's just me, we shouldn't overwrite the conversation metadata with 'Me' data if it already has 'Other' data.
+        if (!partner && participants.length > 0) {
+            // It's possible the array only contains 'Me'. In that case, do NOT set partner metadata.
+            // However, if it's a new conversation, we might need something.
+            // Let's check if the first one is me.
+            const first = participants[0];
+            if (first.name !== myName && first.distance !== "SELF") {
+                partner = first;
+            }
+        }
+
+        if (partner) {
+            headline = partner.headline || "";
+            distance = partner.distance || "";
+            // imgUrl extraction can be enhanced later if content.js sends it.
+            if (partner.imgUrl) imgUrl = partner.imgUrl;
+            if (partner.isPremium) isPremium = true;
+        }
+    }
     // --- API NORMALIZATION END ---
 
     if (!timestamp || isNaN(timestamp)) {
@@ -55,54 +92,66 @@ export async function handleNewConversation(data, sendResponse) {
 
     console.log(`LinkBee: [PROCESSING] ID: ${conversationId} (Name: ${targetName})`);
 
-    const store = await chrome.storage.local.get(['conversations', 'apiKey', 'aiProvider', 'analysisThreshold', 'userProfile']);
-    const conversations = store.conversations || {};
-    const myName = store.userProfile?.name;
+    // Fetch Strong Typed Data
+    const conversations = await typedStorage.getConversations();
 
     // --- ID CONSOLIDATION STRATEGY ---
     // If the incoming ID is a Thread URN (e.g. 2-Njg...), checking if we already have this conversation 
     // stored under a legacy Profile Key (ACoAA...).
-    // This handles the case where content.js couldn't resolve the Profile ID (e.g. delta update).
 
     let consolidatedId = conversationId;
 
     // Check if ID is a Thread ID (starts with 2- or urn:li:messagingThread)
     const isThreadId = conversationId.startsWith("2-") || conversationId.includes("messagingThread");
+    // Check if direct match exists in array
+    const hasDirectMatch = conversations.some(c => c.id === conversationId);
 
-    if (isThreadId && !conversations[conversationId]) {
+    if (isThreadId && !hasDirectMatch) {
         // Only valid if we DON'T have a direct entry for this Thread ID yet.
         // Try to find a legacy entry that matches.
 
-        const legacyMatch = Object.keys(conversations).find(key => {
-            const entry = conversations[key];
+        // Extract Short ID (e.g., 2-AbCd...) from urn:li:messagingThread:2-AbCd...
+        let shortId = conversationId;
+        const shortMatch = conversationId.match(/messagingThread:(.*)/);
+        if (shortMatch) {
+            shortId = shortMatch[1];
+        }
+
+        const encodedShortId = encodeURIComponent(shortId);
+        console.log(`LinkBee: [CONSOLIDATION] Searching for match. ShortID: ${shortId}`);
+
+        // Array-based Find
+        const legacyMatch = conversations.find(entry => {
             // Match 1: Entry has explicit 'threadUrn' saved
             if (entry.threadUrn === conversationId) return true;
 
             // Match 2: Entry URL contains this Thread ID
-            // Legacy URL format: .../messaging/thread/2-ABC.../
-            if (entry.url && entry.url.includes(conversationId)) return true;
+            if (entry.url) {
+                if (entry.url.includes(conversationId)) return true;
+                if (entry.url.includes(shortId)) return true;
+                if (entry.url.includes(encodedShortId)) return true;
+            }
 
-            // Match 3: Entry URN matches (unlikely if key differs, but possible)
+            // Match 3: Entry URN matches
             if (entry.urn === conversationId || entry.urn === urn) return true;
 
             return false;
         });
 
         if (legacyMatch) {
-            console.log(`LinkBee: [CONSOLIDATION] Mapped Thread ID ${conversationId} -> Legacy ID ${legacyMatch}`);
-            consolidatedId = legacyMatch;
+            console.log(`LinkBee: [CONSOLIDATION] Mapped Thread ID ${shortId} -> Legacy ID ${legacyMatch.id}`);
+            consolidatedId = legacyMatch.id;
+        } else {
+            console.log(`LinkBee: [CONSOLIDATION] No match found.`);
         }
     }
 
     // Use the consolidated ID for storage
     const finalId = consolidatedId;
 
-
     // 1. INFER NAME FROM HISTORY (If Unknown)
     if (targetName === "Unknown" && history && history.length > 0) {
-        // Find a message from the "other" person
-        // Logic: Message not marked isMe, and sender name is not "Me" or my real name
-        const otherMsg = history.reverse().find(m =>
+        const otherMsg = history.slice().reverse().find(m =>
             !m.isMe &&
             m.sender !== "Me" &&
             (!myName || m.sender !== myName)
@@ -114,33 +163,61 @@ export async function handleNewConversation(data, sendResponse) {
         }
     }
 
-    // --- MIGRATION LOGIC REPLACED BY CONSOLIDATION ABOVE ---
+    // 2. GET EXISTING OR INIT NEW (From Array)
+    let existing = conversations.find(c => c.id === finalId);
 
-    const existing = conversations[finalId] || {
-        id: finalId,
-        urn: urn, // Store URN if new
-        name: targetName,
-        history: [],
-        status: 'active'
-    };
+    if (!existing) {
+        existing = {
+            id: finalId,
+            urn: urn, // Store URN if new
+            name: targetName,
+            history: [],
+            status: 'active',
+            // Initialize metadata
+            headline: headline,
+            networkDistance: distance,
+            imgUrl: imgUrl || "",
+            isPremium: isPremium,
+            isSponsored: isSponsored || false,
+            threadUrn: threadUrn || urn // Prefer explicit threadUrn
+        };
+    }
 
-    // Update Metadata
+    // Update Metadata (Smart Merge)
+    // 1. Name: Overwrite 'Unknown' but protect real names.
     if (existing.name === "Unknown" && targetName !== "Unknown") existing.name = targetName;
+    if (targetName !== "Unknown" && targetName !== "Unknown (Update)" && existing.name === "Unknown (Update)") {
+        existing.name = targetName; // Upgrade from Update placeholder
+    }
+
+    // 2. Headline: Overwrite if new one is valid
+    if (headline && headline.length > 0) existing.headline = headline;
+
+    // 3. Distance: Overwrite if valid
+    if (distance && distance.length > 0) existing.networkDistance = distance;
+
+    // 4. Image: Overwrite if valid
+    if (imgUrl && imgUrl.length > 0) existing.imgUrl = imgUrl;
+
+    // 5. Premium Status: Trust the latest data
+    if (isPremium) existing.isPremium = true;
+
+    // 6. Sponsored Status: Trust the latest data
+    if (isSponsored !== undefined) existing.isSponsored = isSponsored;
+
     // Always update threadUrn if we have it (for future consolidation)
-    if (urn && urn !== existing.urn) existing.threadUrn = urn;
+    const bestThreadUrn = threadUrn || urn;
+    if (bestThreadUrn && bestThreadUrn !== existing.urn && bestThreadUrn.startsWith("urn:li:messagingThread")) {
+        existing.threadUrn = bestThreadUrn;
+    }
 
     // URL STORAGE LOGIC (User Request)
-    // 1. If incoming URL has "/messaging/", it is the best source (Thread URL) -> Store it.
     if (url && url.includes("/messaging/")) {
         existing.url = url;
     }
-    // 2. If existing URL already has "/messaging/", PRESERVE IT. 
-    // (Do not overwrite it with a Notification or Feed URL)
     else if (existing.url && existing.url.includes("/messaging/")) {
         // No-op: Keep the high-quality link we already have.
     }
-    // 3. Fallback: If neither has "/messaging/", construct a Profile URL from the ID.
-    // This allows opening the User's Profile as a fallback (better than generic feed).
     else {
         existing.url = `https://www.linkedin.com/in/${finalId}/`;
     }
@@ -162,15 +239,28 @@ export async function handleNewConversation(data, sendResponse) {
 
     if (isMe) existing.status = 'active';
 
-    // 3. PERSIST INITIAL STATE
-    conversations[finalId] = existing;
-    await chrome.storage.local.set({ conversations });
+    // 3. PERSIST STATE (Atomic Save)
+    await typedStorage.saveConversation(existing);
     console.log("LinkBee: [SAVED] Initial data persisted for", finalId);
 
     // Send success response immediately
     if (sendResponse) sendResponse({ success: true, id: finalId });
 
-    // 4. TRIGGER ANALYSIS (DISABLED: Manual Only per User Request)
-    // We strictly save data here. Analysis is now triggered manually via the UI.
+    // 4. TRIGGER ANALYSIS (Deferred)
+    // Only analyze if history has likely changed or it's a new conversation
+    // Fetch Settings for Analysis
+    const settings = await typedStorage.getSettings();
+    if (settings.apiKey) {
+        console.log("LinkBee: [TRIGGER] Triggering analysis for", finalId);
+        // Run analysis asynchronously (don't await)
+        analyzeConversation(
+            existing,
+            settings.apiKey,
+            settings.aiProvider || 'gemini', // Fix: Use aiProvider from schema
+            settings.followUpThreshold || 0
+        ).catch(err => console.error("LinkBee: Analysis trigger failed", err));
+    } else {
+        console.log("LinkBee: [SKIP] Analysis skipped (No API Key)");
+    }
     calculateBadge();
 }

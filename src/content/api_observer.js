@@ -19,32 +19,31 @@
     window.console.info = function () { if (isLinkBee(arguments)) originalInfo.apply(window.console, arguments); };
     window.console.debug = function () { if (isLinkBee(arguments)) originalDebug.apply(window.console, arguments); };
 
-    // 1. Stealth Configuration
-    // We store references to original natives immediately to prevent recursive trapping
     const originalFetch = window.fetch;
     const originalXHR = window.XMLHttpRequest;
 
     // Target patterns for LinkBee (Messaging & Profile Views)
     const TARGET_PATTERNS = [
-        '/voyager/api/messaging/conversations', // Chat history/updates
-        '/voyager/api/identity/dash/profileViews', // Profile views,
-        '/voyager/api/voyagerMessagingGraphQL/graphql?queryId=messengerMessages'
+        '/voyager/api/voyagerMessagingGraphQL/graphql?queryId=messengerMessages', // Called when opening individual message chat
+        '/voyager/api/voyagerMessagingGraphQL/graphql?queryId=messengerConversations' // Called when scrollling through side bar
 
     ];
 
-    // Helper: Safely emit data without breaking the app flow
     function emitData(url, payload) {
         try {
-            if (url.includes("messaging") || url.includes("profileViews") || url.includes("graphql")) {
-                const matched = TARGET_PATTERNS.some(pattern => url.includes(pattern));
+            const matched = TARGET_PATTERNS.some(pattern => url.includes(pattern));
 
-                if (matched) {
-                    console.log("LinkBee: [MATCH] Captured relevant data from:", url);
-                    const event = new CustomEvent('LinkBee_Inbound_API', {
-                        detail: { url, response: payload, timestamp: Date.now() }
-                    });
-                    window.dispatchEvent(event);
-                }
+            if (matched) {
+                console.log("LinkBee: [MATCH] Captured relevant data from:", url);
+
+                const event = new CustomEvent('LinkBee_Inbound_API', {
+                    detail: {
+                        url,
+                        response: payload,
+                        timestamp: Date.now()
+                    }
+                });
+                window.dispatchEvent(event);
             }
         } catch (err) {
             originalError.apply(window.console, ["LinkBee: API Observer Emission Error", err]);
@@ -53,8 +52,6 @@
 
     console.log("LinkBee: [READY] Console Filter Active & Observer Loaded.");
 
-    // 2. Fetch Proxy Interceptor
-    // Using Proxy is harder to detect than overwriting window.fetch = function...
     window.fetch = new Proxy(originalFetch, {
         apply: async function (target, thisArg, argumentsList) {
             const [resource] = argumentsList;
@@ -84,8 +81,7 @@
         }
     });
 
-    // 3. XHR Interceptor (Legacy Support)
-    // LinkedIn still uses XHR for some tracking/older endpoints
+
     const XHROpen = originalXHR.prototype.open;
     const XHRSend = originalXHR.prototype.send;
 
@@ -109,8 +105,6 @@
         return XHRSend.apply(this, arguments);
     };
 
-    // 4. Integrity Masking (Optional but Recommended)
-    // Some anti-bots check if fetch.toString() returns "[native code]"
     const nativeString = originalFetch.toString();
     window.fetch.toString = function () {
         return nativeString;

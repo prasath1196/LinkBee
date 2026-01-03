@@ -2,9 +2,15 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { extension } from '../api/extension'
 import { queryClient } from '../lib/queryClient'
 
-import { AppReminder, StorageSchema, AppConversation } from '../types/storage'
+import { Reminder, StoredConversation } from '../../types/storage'
 
-export interface ReminderItem extends AppReminder {
+// Define local aggregate for UI state
+interface StorageSchema {
+    reminders?: Reminder[];
+    conversations?: Record<string, StoredConversation>;
+}
+
+export interface ReminderItem extends Reminder {
     conversationName: string
 }
 
@@ -13,8 +19,8 @@ export function useReminders() {
         queryKey: ['reminders'],
         queryFn: async () => {
             const data = await extension.storage.get<StorageSchema>(['reminders', 'conversations'])
-            const rawReminders: AppReminder[] = data.reminders || []
-            const convs = (data.conversations || {}) as Record<string, AppConversation>
+            const rawReminders: Reminder[] = data.reminders || []
+            const convs = (data.conversations || {}) as Record<string, StoredConversation>
 
             return rawReminders
                 .filter((r) => r.status !== 'done')
