@@ -30,14 +30,20 @@ export function useFollowups() {
                 let threadUrl = "https://www.linkedin.com/messaging/"; // Default
 
                 // 0. Explicit Thread URN (The Gold Standard)
+                // 0. Explicit Thread URN (The Gold Standard)
+                // URNs can be complex: "urn:li:msg_conversation:(profile,2-abc...)"
+                // We need to extract the "2-..." part.
                 const threadUrn = c.threadUrn || n.threadUrn;
                 if (threadUrn) {
-                    // Extract ID part if it's a full URN (urn:li:messagingThread:2-abc...)
-                    const threadId = threadUrn.includes("messagingThread:")
-                        ? threadUrn.split("messagingThread:")[1]
-                        : threadUrn;
-
-                    threadUrl = `https://www.linkedin.com/messaging/thread/${threadId}/`;
+                    // Look for 2- followed by alphanumeric/dashes
+                    const match = threadUrn.match(/(2-[a-zA-Z0-9_\-]+)/);
+                    if (match) {
+                        threadUrl = `https://www.linkedin.com/messaging/thread/${match[1]}/`;
+                    } else if (threadUrn.includes("messagingThread:")) {
+                        // Fallback for simple URNs
+                        const threadId = threadUrn.split("messagingThread:")[1];
+                        threadUrl = `https://www.linkedin.com/messaging/thread/${threadId}/`;
+                    }
                 }
                 // 1. Explicit Thread URL (Highest Priority from stored URL)
                 else if (c.url && c.url.includes('/messaging/thread/')) {
