@@ -3,9 +3,11 @@ import { Label } from '../ui/label'
 import { Input } from '../ui/input'
 import { Button } from '../ui/button'
 import { useSettings } from '../../hooks/useSettings'
+import { useNanoStatus } from '../../hooks/useNanoStatus'
 
 export function Settings({ onBack }: { onBack: () => void }) {
     const { settings, status, updateSettings, save } = useSettings()
+    const nano = useNanoStatus()
 
     return (
         <div className="space-y-4">
@@ -18,21 +20,33 @@ export function Settings({ onBack }: { onBack: () => void }) {
 
             <Card>
                 <CardHeader>
-                    <CardTitle>AI Configuration</CardTitle>
-                    <CardDescription>Configure your AI provider.</CardDescription>
+                    <CardTitle>On-device AI (free)</CardTitle>
+                    <CardDescription>Gemini Nano runs privately in Chrome to decide who needs a follow-up. No key, no cost.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                    {nano.status === 'checking' && <p className="text-sm text-muted-foreground">Checking…</p>}
+                    {nano.status === 'available' && <p className="text-sm text-green-500">Ready ✓</p>}
+                    {nano.status === 'downloadable' && (
+                        <Button onClick={nano.enable} className="w-full">Enable on-device AI</Button>
+                    )}
+                    {nano.status === 'downloading' && (
+                        <p className="text-sm text-muted-foreground">Downloading model… {nano.progress ?? 0}%</p>
+                    )}
+                    {nano.status === 'unavailable' && (
+                        <p className="text-sm text-muted-foreground">
+                            Not supported on this device (needs Chrome 138+, 22 GB free disk, and a 4 GB+ GPU or 16 GB RAM). Add a Gemini API key below instead.
+                        </p>
+                    )}
+                    {nano.error && <p className="text-sm text-red-500">{nano.error}</p>}
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>Gemini API key (optional)</CardTitle>
+                    <CardDescription>Improves follow-up drafts. Required if on-device AI isn't supported.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    <div className="space-y-2">
-                        <Label htmlFor="provider">AI Provider</Label>
-                        <select
-                            id="provider"
-                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                            value={settings.aiProvider}
-                            onChange={e => updateSettings({ aiProvider: e.target.value as any })}
-                        >
-                            <option value="gemini">Google (Gemini 2.0 Flash)</option>
-                        </select>
-                    </div>
                     <div className="space-y-2">
                         <Label htmlFor="apiKey">API Key</Label>
                         <Input
@@ -40,9 +54,19 @@ export function Settings({ onBack }: { onBack: () => void }) {
                             type="password"
                             value={settings.apiKey}
                             onChange={e => updateSettings({ apiKey: e.target.value })}
-                            placeholder="sk-..."
+                            placeholder="AIza..."
                         />
-                        <p className="text-xs text-muted-foreground">Stored locally in your browser.</p>
+                        <p className="text-xs text-muted-foreground">
+                            Stored locally in your browser.{' '}
+                            <a
+                                href="https://aistudio.google.com/app/apikey"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="underline"
+                            >
+                                Get a key
+                            </a>
+                        </p>
                     </div>
                 </CardContent>
             </Card>

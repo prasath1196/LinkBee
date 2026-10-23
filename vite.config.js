@@ -20,6 +20,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         debug: resolve(__dirname, 'src/ui/debug.html'),
+        offscreen: resolve(__dirname, 'src/offscreen/offscreen.html'),
       },
     },
   },

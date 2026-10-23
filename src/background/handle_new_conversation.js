@@ -3,6 +3,7 @@ import { analyzeConversation } from './analyze_conversations.js';
 import { calculateBadge } from './badge_manager.js';
 import { generateHistoryHash } from '../utils/hash.js';
 import { typedStorage } from '../services/storage.js';
+import { aiService } from '../utils/ai_service.js';
 
 export async function handleNewConversation(data, sendResponse) {
     console.log("LinkBee: [BACKGROUND] Received Data", data);
@@ -250,7 +251,7 @@ export async function handleNewConversation(data, sendResponse) {
     // Only analyze if history has likely changed or it's a new conversation
     // Fetch Settings for Analysis
     const settings = await typedStorage.getSettings();
-    if (settings.apiKey) {
+    if (await aiService.canAnalyze(settings.apiKey)) {
         console.log("LinkBee: [TRIGGER] Triggering analysis for", finalId);
         // Run analysis asynchronously (don't await)
         analyzeConversation(
@@ -260,7 +261,7 @@ export async function handleNewConversation(data, sendResponse) {
             settings.followUpThreshold || 0
         ).catch(err => console.error("LinkBee: Analysis trigger failed", err));
     } else {
-        console.log("LinkBee: [SKIP] Analysis skipped (No API Key)");
+        console.log("LinkBee: [SKIP] Analysis skipped (No API key, Nano unavailable)");
     }
     calculateBadge();
 }

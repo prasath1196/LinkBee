@@ -69,10 +69,6 @@ export function useSettings() {
     }
 
     const save = async () => {
-        if (!localSettings.apiKey?.trim()) {
-            setStatus('Error: API Key is required')
-            return
-        }
         saveMutation.mutate(localSettings)
     }
 

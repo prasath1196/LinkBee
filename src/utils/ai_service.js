@@ -1,6 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 import { CONNECTION_ANALYSIS_PROMPT } from './prompts/connection_analysis_prompt.js';
 import { PROFILE_VIEW_PROMPT } from './prompts/profile_view_prompt.js';
+import { TRIAGE_SYSTEM_PROMPT, TRIAGE_SCHEMA, TRIAGE_PROMPT } from './prompts/triage_prompt.js';
+import { nanoAvailability, nanoPrompt } from './nano_client.js';
 
 /**
  * AI Integration Service
@@ -65,34 +67,38 @@ class GeminiClient {
 
 class AIService {
 
+    // True if any AI backend (Gemini key or on-device Nano) can run analysis
+    async canAnalyze(apiKey) {
+        if (apiKey && String(apiKey).trim()) return true;
+        return (await nanoAvailability()) === 'available';
+    }
+
     // 1. Analyze Conversation for Follow-up Opportunities
+    // Tiered: Nano triage first (free, on-device), escalate to Gemini on YES.
     async analyze(provider, context, apiKey) {
-        // We only support Gemini for advanced analysis right now
-        if (provider !== 'gemini' && provider !== 'openai') return null; // Fallback or strict
-
         try {
-            const client = new GeminiClient(apiKey);
+            if ((await nanoAvailability()) === 'available') {
+                const triage = await this.triageWithNano(context);
 
-            // Prepare Prompt Inputs
-            const allMessages = context.history || [];
-            const contextMessages = allMessages.slice(-15);
-            const contextText = contextMessages.map(m => `[${m.isMe ? 'Me' : 'Them'}]: ${m.text}`).join("\n");
+                if (triage) {
+                    if (triage.decision !== 'YES') return triage;
+                    if (!apiKey) return triage;
 
-            const decisionMessages = allMessages.slice(-4);
-            let decisionText = "";
-            if (decisionMessages.length > 0) {
-                decisionText = decisionMessages.map(m => `[${m.isMe ? 'Me' : 'Them'}]: ${m.text}`).join("\n");
-            } else {
-                decisionText = `[Last Message]: "${context.lastMessage}"`;
+                    try {
+                        const result = await this.analyzeWithGemini(context, apiKey);
+                        return { ...result, engine: 'nano+gemini' };
+                    } catch (e) {
+                        console.warn("LinkBee: Gemini escalation failed, using Nano result", e);
+                        return triage;
+                    }
+                }
+                // Nano triage failed: fall through to Gemini
             }
 
-            const prompt = CONNECTION_ANALYSIS_PROMPT(contextText, decisionText, context, context.previous_followups);
+            if (!apiKey) return null;
 
-            console.log("[LinkBee AI] Analyzing Conversation...");
-            const result = await client.generate(prompt, true);
-
-            console.log(`[LinkBee AI] Result: ${result.decision} (${result.category})`);
-            return result;
+            const result = await this.analyzeWithGemini(context, apiKey);
+            return { ...result, engine: 'gemini' };
 
         } catch (e) {
             console.error("AI Analysis Failed:", e);
@@ -100,51 +106,89 @@ class AIService {
         }
     }
 
-    // 2. Generate Hook for Profile View (or any generic message)
+    // Returns normalized triage result, or null if Nano failed
+    async triageWithNano(context) {
+        try {
+            const history = context.history || [];
+            const messages = history.length > 0
+                ? history.slice(-8)
+                : [{ isMe: !!context.lastSenderIsMe, text: context.lastMessage || '' }];
+
+            console.log("[LinkBee AI] Triaging with Nano...");
+            const result = await nanoPrompt(
+                TRIAGE_SYSTEM_PROMPT,
+                TRIAGE_PROMPT(messages, context),
+                TRIAGE_SCHEMA
+            );
+
+            result.reminder = result.reminder_date
+                ? { text: result.reminder_text || 'Follow up', suggested_date: result.reminder_date }
+                : null;
+            delete result.reminder_text;
+            delete result.reminder_date;
+            result.engine = 'nano';
+
+            console.log(`[LinkBee AI] Nano Result: ${result.decision} (${result.category})`);
+            return result;
+        } catch (e) {
+            console.warn("LinkBee: Nano triage failed, falling back to Gemini", e);
+            return null;
+        }
+    }
+
+    // Full Gemini analysis (throws on failure)
+    async analyzeWithGemini(context, apiKey) {
+        const client = new GeminiClient(apiKey);
+
+        // Prepare Prompt Inputs
+        const allMessages = context.history || [];
+        const contextMessages = allMessages.slice(-15);
+        const contextText = contextMessages.map(m => `[${m.isMe ? 'Me' : 'Them'}]: ${m.text}`).join("\n");
+
+        const decisionMessages = allMessages.slice(-4);
+        let decisionText = "";
+        if (decisionMessages.length > 0) {
+            decisionText = decisionMessages.map(m => `[${m.isMe ? 'Me' : 'Them'}]: ${m.text}`).join("\n");
+        } else {
+            decisionText = `[Last Message]: "${context.lastMessage}"`;
+        }
+
+        const prompt = CONNECTION_ANALYSIS_PROMPT(contextText, decisionText, context, context.previous_followups);
+
+        console.log("[LinkBee AI] Analyzing Conversation with Gemini...");
+        const result = await client.generate(prompt, true);
+
+        console.log(`[LinkBee AI] Result: ${result.decision} (${result.category})`);
+        return result;
+    }
+
+    // 2. Generate a short message (e.g. hook for a profile view)
+    // The prompt is passed in history[0].text by the caller.
     async generateMessage(params) {
-        const { provider, apiKey, history, myProfile } = params;
+        const { apiKey, history } = params;
 
         try {
-            const client = new GeminiClient(apiKey);
-
-            // The history[0].text contains the raw prompt from the caller
-            // This is a bit of a legacy signature adaptation.
-            // Ideally we'd just pass 'prompt' directly. 
-            // We'll extract the prompt text from the 'history' object passed by the caller.
-
-            let prompt = "";
-            if (history && history.length > 0) {
-                prompt = history[0].text;
-            }
-
+            const prompt = history && history.length > 0 ? history[0].text : "";
             if (!prompt) return { suggestion: "Error: No prompt provided." };
 
             console.log("[LinkBee AI] Generating Message...");
 
-            // For profile views, we usually want specific JSON structure OR just text.
-            // The prompt in process_profile_views.js (now imported?) requested text.
-            // But wait, the previous implementation in process_profile_views.js was expecting
-            // `aiResponse.suggestion`. So we should probably return JSON.
+            if (apiKey) {
+                const client = new GeminiClient(apiKey);
+                const resultText = await client.generate(prompt, false);
+                return { suggestion: resultText };
+            }
 
-            // Let's modify the prompt to ensure JSON output if we want structure, 
-            // OR we wrap the text result.
-            // The ProfileView Prompt requests "Max 2 sentences". It doesn't explicitly ask for JSON.
-            // So let's assume text mode, but wrap it for the caller.
+            if ((await nanoAvailability()) === 'available') {
+                const resultText = await nanoPrompt(
+                    'You write short, friendly LinkedIn messages as the user. Never mention AI.',
+                    prompt,
+                    null
+                );
+                return { suggestion: resultText };
+            }
 
-            const textParams = {
-                responseMimeType: "text/plain"
-            };
-
-            // Start Generation
-            // Use generating in TEXT mode for creative writing usually, but we can force JSON if needed.
-            // The prompt we moved (PROFILE_VIEW_PROMPT) does NOT ask for JSON.
-            // So we use text mode.
-
-            const resultText = await client.generate(prompt, false);
-
-            return {
-                suggestion: resultText
-            };
+            return { suggestion: "Error: No AI available. Enable on-device AI or add a Gemini API key." };
 
         } catch (e) {
             console.error("AI Message Generation Failed:", e);

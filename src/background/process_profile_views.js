@@ -46,8 +46,12 @@ export async function processProfileViews(newViews) {
     if (viewsToAnalyze.length > 0) {
         console.log(`LinkBee: [AI] ${viewsToAnalyze.length} new profile views to analyze.`);
 
-        // Process in background
-        analyzeProfileViews(viewsToAnalyze, aiProvider || 'openai', apiKey);
+        // Process in background (Nano can run without an API key)
+        if (await aiService.canAnalyze(apiKey)) {
+            analyzeProfileViews(viewsToAnalyze, aiProvider || 'gemini', apiKey);
+        } else {
+            console.log("LinkBee: [AI] No AI available (no API key, Nano unavailable). Skipping profile view analysis.");
+        }
     }
 }
 

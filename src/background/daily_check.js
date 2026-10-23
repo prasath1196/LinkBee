@@ -2,6 +2,7 @@ import { analyzeConversation } from './analyze_conversations.js';
 import { calculateBadge } from './badge_manager.js';
 import { updateAnalysisState, forceResetAnalysisState } from './update_analysis_state.js';
 import { typedStorage } from '../services/storage.js';
+import { aiService } from '../utils/ai_service.js';
 
 export const ALARM_NAME = 'linkbee_daily_check';
 export const CHECK_INTERVAL_MINUTES = 60 * 4; // Check every 4 hours
@@ -17,8 +18,8 @@ export async function reanalyzeStoredData(force = false) {
         // If Forced, use 0 threshold to bypass time checks
         const threshold = force ? 0 : (analysisThreshold || 4);
 
-        if (!apiKey) {
-            console.log("LinkBee: No API Key found. Skipping analysis.");
+        if (!(await aiService.canAnalyze(apiKey))) {
+            console.log("LinkBee: No AI available (no API key, Nano unavailable). Skipping analysis.");
             return;
         }
 

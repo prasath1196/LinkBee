@@ -197,6 +197,7 @@ export async function analyzeConversation(conv, apiKey, provider, thresholdHours
                 decision: result.decision,
                 reason: result.reason,
                 confidence: result.confidence_score,
+                engine: result.engine,
                 processingTime: Date.now() - now
             };
 
