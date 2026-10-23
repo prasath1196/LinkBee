@@ -5,6 +5,8 @@ declare const LanguageModel: any
 
 export type NanoStatus = 'checking' | 'available' | 'downloadable' | 'downloading' | 'unavailable'
 
+const POLL_INTERVAL_MS = 5000
+
 export function useNanoStatus() {
     const [status, setStatus] = useState<NanoStatus>('checking')
     const [progress, setProgress] = useState<number | null>(null)
@@ -23,32 +25,58 @@ export function useNanoStatus() {
         check()
     }, [check])
 
+    // Downloads happen in Chrome's background and progress events are unreliable,
+    // so poll availability while downloading.
+    useEffect(() => {
+        if (status !== 'downloading') return
+        let cancelled = false
+        const id = setInterval(async () => {
+            const result = await localAvailability()
+            if (!cancelled) setStatus(result as NanoStatus)
+        }, POLL_INTERVAL_MS)
+        return () => {
+            cancelled = true
+            clearInterval(id)
+        }
+    }, [status])
+
     // Must be called from a click handler: model download requires user activation.
-    const enable = useCallback(async () => {
+    // LanguageModel.create() is invoked synchronously (before any await) to keep activation.
+    const enable = useCallback(() => {
         if (typeof LanguageModel === 'undefined') {
             setStatus('unavailable')
             return
         }
         setError(null)
-        setProgress(0)
+        setProgress(null)
         setStatus('downloading')
+        let createPromise: Promise<any>
         try {
-            const session = await LanguageModel.create({
+            createPromise = LanguageModel.create({
                 ...NANO_OPTIONS,
                 monitor(m: any) {
                     m.addEventListener('downloadprogress', (e: any) => {
-                        setProgress(Math.round(e.loaded * 100))
+                        const pct = Math.round(e.loaded * 100)
+                        setProgress(pct > 0 ? pct : null)
                     })
                 }
             })
-            session.destroy()
         } catch (e: any) {
             setError(e?.message || String(e))
-        } finally {
-            setProgress(null)
-            await check()
+            check()
+            return
         }
+        createPromise
+            .then((session: any) => {
+                try { session?.destroy?.() } catch { /* ignore */ }
+                setProgress(null)
+                return check()
+            })
+            .catch((e: any) => {
+                setError(e?.message || String(e))
+                return check()
+            })
     }, [check])
 
-    return { status, progress, error, enable }
+    return { status, progress, error, enable, recheck: check }
 }
